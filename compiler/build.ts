@@ -9,6 +9,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { prepareAuthoringModule } from "../src/authoring.ts";
 import { canonicalJson, compileLibrary, compilePage, LESSON_SLOT, LESSONS_SLOT, sha256Hex, validateLesson } from "../src/lesson.ts";
 
 const TEMPLATE_PATH = new URL("../runtime/index.template.html", import.meta.url);
@@ -64,7 +65,7 @@ export function buildLibraryScript(
 ): LibraryResult {
   const lessons = lessonValues.map(validateLesson);
   const runtime = libraryTemplate ?? readFileSync(LIBRARY_PATH, "utf8");
-  const authoring = readFileSync(AUTHORING_PATH, "utf8");
+  const authoring = prepareAuthoringModule(readFileSync(AUTHORING_PATH, "utf8"));
   const script = compileLibrary(runtime, lessons, authoring);
   const target = resolve(outPath);
   mkdirSync(dirname(target), { recursive: true });

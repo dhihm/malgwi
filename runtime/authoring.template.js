@@ -7,15 +7,7 @@ var AUTHORING_CONFIRM_KEY = "ysp:authoring:confirm:v1";
 var LINE_CAP = 200;
 var BATCH_SIZE = 40;
 
-function canonicalJson(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
-  var entries = Object.keys(value)
-    .filter(function (key) { return value[key] !== undefined; })
-    .sort()
-    .map(function (key) { return JSON.stringify(key) + ":" + canonicalJson(value[key]); });
-  return "{" + entries.join(",") + "}";
-}
+/*__CANONICAL_JSON__*/
 
 function sha256Hex(text) {
   if (!window.crypto || !window.crypto.subtle) {
@@ -81,12 +73,13 @@ function saveStoredLesson(key, lesson) {
 }
 
 function isLessonComplete(lesson) {
-  if (!lesson || !Array.isArray(lesson.lines)) return false;
+  if (!lesson || !Array.isArray(lesson.lines) || lesson.lines.length === 0) return false;
   for (var i = 0; i < lesson.lines.length; i += 1) {
     var line = lesson.lines[i];
-    if (!line.pronunciation || !line.translation) return false;
+    if (typeof line.pronunciation !== "string" || !line.pronunciation) return false;
+    if (typeof line.translation !== "string" || !line.translation) return false;
   }
-  return lesson.lines.length > 0;
+  return true;
 }
 
 function loadAuthoringSettings() {
@@ -187,8 +180,6 @@ function buildLessonDraft(captions, videoId, studyLanguage, sourceLanguage, titl
           start_ms: caption.start_ms,
           end_ms: caption.end_ms,
           original: caption.text,
-          pronunciation: "",
-          translation: "",
         };
       }),
     };

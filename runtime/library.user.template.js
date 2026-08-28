@@ -929,6 +929,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
 
   function startCreateLesson(videoId) {
     if (createBusy) return;
+    if (lessonForCompiled(videoId)) return;
     var text = uiStrings();
     var settings = loadAuthoringSettings();
     if (!settings.endpoint || !settings.apiKey) {
@@ -1057,23 +1058,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     }
     var local = resolveLocalLesson(videoId);
     if (local && isLessonComplete(local.lesson)) {
-      var capture = readSessionCaptionsImpl();
-      if (capture.captions && capture.captions.length > 0) {
-        captionDigest(capture.captions).then(function (digest) {
-          if (digest !== local.lesson.source_digest) {
-            unmount();
-            mountCreate(videoId);
-            setCreateStatus(uiStrings().digestChanged);
-            return;
-          }
-          unmountCreate();
-          mount(local.lesson);
-        }).catch(function () {
-          unmountCreate();
-          mount(local.lesson);
-        });
-        return;
-      }
       unmountCreate();
       mount(local.lesson);
       return;

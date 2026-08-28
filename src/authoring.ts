@@ -18,6 +18,51 @@ export const LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
 export const LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
 export const AUTHORING_SETTINGS_KEY = "ysp:authoring:v1";
 
+/** Injected into runtime/authoring.template.js so browser digests match lesson.ts. */
+export const CANONICAL_JSON_SLOT = "/*__CANONICAL_JSON__*/";
+export const BROWSER_CANONICAL_JSON_SOURCE = `function canonicalJson(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+  var entries = Object.keys(value)
+    .filter(function (key) { return value[key] !== undefined; })
+    .sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; })
+    .map(function (key) { return JSON.stringify(key) + ":" + canonicalJson(value[key]); });
+  return "{" + entries.join(",") + "}";
+}`;
+
+/** Prepare the authoring runtime module with the shared canonicalJson implementation. */
+export function prepareAuthoringModule(source: string): string {
+  if (!source.includes(CANONICAL_JSON_SLOT)) {
+    throw new Error("authoring template missing canonical JSON slot");
+  }
+  return source.replace(CANONICAL_JSON_SLOT, BROWSER_CANONICAL_JSON_SOURCE);
+}
+
+/** Verify browser canonicalJson matches the compiler implementation. */
+export function browserCanonicalJson(value: unknown): string {
+  const fn = new Function(`${BROWSER_CANONICAL_JSON_SOURCE}; return canonicalJson;`)();
+  return fn(value) as string;
+}
+
+export interface LessonDraftLine {
+  readonly start_ms: number;
+  readonly end_ms: number;
+  readonly original: string;
+  readonly pronunciation?: string;
+  readonly translation?: string;
+  readonly sentence_end?: boolean;
+}
+
+/** In-progress watch-page lesson; model fields appear only after authoring batches. */
+export interface LessonDraft {
+  readonly schema_version: 2;
+  readonly video: LessonVideo;
+  readonly study_language: string;
+  readonly source_digest: string;
+  readonly lines: readonly LessonDraftLine[];
+  readonly glossary?: readonly GlossaryEntry[];
+}
+
 /** Default cap on lines sent to the model in one generate action. */
 export const DEFAULT_LINE_CAP = 200;
 /** Lines per model request when batching. */
@@ -70,20 +115,18 @@ export function batchIndices(lineCount: number, batchSize: number, lineCap: numb
   return batches;
 }
 
-/** Build a lesson draft from captured captions; model fields start empty. */
+/** Build a lesson draft from captured captions; model fields are added later. */
 export function buildLessonDraft(
   captions: readonly CaptionLine[],
   video: LessonVideo,
   studyLanguage: string,
-): LessonV2 {
+): LessonDraft {
   const validated = validateCaptions(captions);
   const digest = captionDigest(validated);
-  const lines: LessonLine[] = validated.map((caption) => ({
+  const lines: LessonDraftLine[] = validated.map((caption) => ({
     start_ms: caption.start_ms,
     end_ms: caption.end_ms,
     original: caption.text,
-    pronunciation: "",
-    translation: "",
   }));
   return {
     schema_version: 2,
@@ -95,14 +138,38 @@ export function buildLessonDraft(
 }
 
 /** Validate and seal a completed local lesson for storage and replay. */
-export function sealLesson(lesson: LessonV2): LessonV2 {
+export function sealLesson(lesson: LessonDraft): LessonV2 {
   if (!isLessonComplete(lesson)) throw new Error("lesson is incomplete");
-  return validateLesson(lesson);
+  const lines: LessonLine[] = lesson.lines.map((line) => ({
+    start_ms: line.start_ms,
+    end_ms: line.end_ms,
+    original: line.original,
+    pronunciation: line.pronunciation!,
+    translation: line.translation!,
+    ...(line.sentence_end !== undefined ? { sentence_end: line.sentence_end } : {}),
+  }));
+  return validateLesson({
+    schema_version: 2,
+    video: lesson.video,
+    study_language: lesson.study_language,
+    source_digest: lesson.source_digest,
+    lines,
+    ...(lesson.glossary !== undefined ? { glossary: lesson.glossary } : {}),
+  });
 }
 
 /** True when every line has non-empty pronunciation and translation. */
-export function isLessonComplete(lesson: LessonV2): boolean {
-  return lesson.lines.every((line) => line.pronunciation.length > 0 && line.translation.length > 0);
+export function isLessonComplete(lesson: LessonDraft | LessonV2): boolean {
+  return (
+    lesson.lines.length > 0 &&
+    lesson.lines.every(
+      (line) =>
+        typeof line.pronunciation === "string" &&
+        line.pronunciation.length > 0 &&
+        typeof line.translation === "string" &&
+        line.translation.length > 0,
+    )
+  );
 }
 
 /**
@@ -110,11 +177,11 @@ export function isLessonComplete(lesson: LessonV2): boolean {
  * timecodes are never changed. Partial batches leave trailing lines empty.
  */
 export function mergeModelBatch(
-  lesson: LessonV2,
+  lesson: LessonDraft,
   startIndex: number,
   response: ModelBatchResponse,
-): LessonV2 {
-  const lines = lesson.lines.map((line) => ({ ...line }));
+): LessonDraft | LessonV2 {
+  const lines: LessonDraftLine[] = lesson.lines.map((line) => ({ ...line }));
   for (const [offset, fields] of response.lines.entries()) {
     const index = startIndex + offset;
     if (index >= lines.length) break;
@@ -128,7 +195,7 @@ export function mergeModelBatch(
   const glossary = response.glossary?.length
     ? response.glossary
     : lesson.glossary;
-  const merged: LessonV2 = {
+  const merged: LessonDraft = {
     ...lesson,
     lines,
     ...(glossary !== undefined ? { glossary } : {}),
@@ -192,7 +259,7 @@ export function parseModelBatchResponse(value: unknown, expectedCount: number): 
 
 /** Fixed prompt fragment listing originals the model must not edit. */
 export function authoringPromptForBatch(
-  lesson: LessonV2,
+  lesson: LessonDraft,
   indices: readonly number[],
 ): { system: string; user: string } {
   const originals = indices.map((index) => {

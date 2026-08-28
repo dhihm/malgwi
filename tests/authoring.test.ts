@@ -1,20 +1,51 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { webcrypto } from "node:crypto";
 import {
   authoringPromptForBatch,
   batchIndices,
+  browserCanonicalJson,
   buildLessonDraft,
   isLessonComplete,
   localLessonStorageKey,
   mergeModelBatch,
   parseModelBatchResponse,
+  prepareAuthoringModule,
   sealLesson,
   upsertLocalLessonIndex,
 } from "../src/authoring.ts";
-import { captionDigest, validateCaptions } from "../src/lesson.ts";
+import { captionDigest, canonicalJson, validateCaptions } from "../src/lesson.ts";
 
 const captionsFixture = JSON.parse(readFileSync(new URL("../fixtures/captions.sample.json", import.meta.url), "utf8"));
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
+const authoringTemplate = readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8");
+
+async function browserSha256Hex(text: string): Promise<string> {
+  const buffer = await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+describe("caption digest parity", () => {
+  test("browser canonicalJson matches lesson.ts", () => {
+    const captions = validateCaptions(captionsFixture);
+    expect(browserCanonicalJson(captions)).toBe(canonicalJson(captions));
+  });
+
+  test("Web Crypto sha256 over browser canonicalJson matches captionDigest", async () => {
+    const captions = validateCaptions(captionsFixture);
+    const canonical = browserCanonicalJson(captions);
+    expect(await browserSha256Hex(canonical)).toBe(captionDigest(captions));
+    expect(await browserSha256Hex(canonical)).toBe(lessonFixture.source_digest);
+  });
+
+  test("prepareAuthoringModule injects the shared canonicalJson implementation", () => {
+    const prepared = prepareAuthoringModule(authoringTemplate);
+    expect(prepared).toContain("return a < b ? -1 : a > b ? 1 : 0");
+    expect(prepared).not.toContain("/*__CANONICAL_JSON__*/");
+  });
+});
 
 describe("local lesson storage keys", () => {
   test("keys lessons by video_id, study_language, and source_digest", () => {
@@ -51,9 +82,9 @@ describe("lesson draft from captions", () => {
         start_ms: caption.start_ms,
         end_ms: caption.end_ms,
         original: caption.text,
-        pronunciation: "",
-        translation: "",
       });
+      expect(draft.lines[index]).not.toHaveProperty("pronunciation");
+      expect(draft.lines[index]).not.toHaveProperty("translation");
     }
     expect(isLessonComplete(draft)).toBe(false);
   });

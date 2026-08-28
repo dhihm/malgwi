@@ -3,12 +3,15 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildLessonPage, buildLibraryScript } from "../compiler/build.ts";
+import { prepareAuthoringModule } from "../src/authoring.ts";
 import { compileLibrary, compilePage, LESSON_SLOT, LESSONS_SLOT, AUTHORING_SLOT, LessonValidationError, validateLesson } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/index.template.html", import.meta.url), "utf8");
 const userscript = readFileSync(new URL("../runtime/study.user.template.js", import.meta.url), "utf8");
 const libraryTemplate = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
-const authoringModule = readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8");
+const authoringModule = prepareAuthoringModule(
+  readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
+);
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
 
 describe("runtime template contract", () => {

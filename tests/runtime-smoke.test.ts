@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import {
   buildLessonDraft,
   localLessonStorageKey,
+  prepareAuthoringModule,
   sealLesson,
   upsertLocalLessonIndex,
   LOCAL_LESSON_INDEX_KEY,
@@ -16,7 +17,9 @@ import { compileLibrary, validateLesson } from "../src/lesson.ts";
 import { validateCaptions } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
-const authoringModule = readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8");
+const authoringModule = prepareAuthoringModule(
+  readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
+);
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
 
 function compileLibraryScript(lessons: ReturnType<typeof validateLesson>[]) {
