@@ -6,9 +6,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+  AUTHORING_API_KEY_STORAGE_KEY,
+  AUTHORING_SETTINGS_KEY,
   buildLessonDraft,
   localLessonStorageKey,
   prepareAuthoringModule,
+  publicSettingsForStorage,
+  normalizeProvider,
   sealLesson,
   upsertLocalLessonIndex,
   LOCAL_LESSON_INDEX_KEY,
@@ -25,6 +29,31 @@ const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample
 
 function compileLibraryScript(lessons: ReturnType<typeof validateLesson>[]) {
   return compileLibrary(template, lessons, authoringModule);
+}
+
+function setAuthoringSettings(
+  storage: Map<string, string>,
+  gmStorage: Map<string, string>,
+  settings: {
+    provider?: string;
+    apiKey: string;
+    model?: string;
+    study_language?: string;
+    custom_endpoint?: string;
+  },
+) {
+  storage.set(
+    AUTHORING_SETTINGS_KEY,
+    JSON.stringify(
+      publicSettingsForStorage({
+        provider: normalizeProvider(settings.provider),
+        model: settings.model,
+        study_language: settings.study_language ?? "ko",
+        custom_endpoint: settings.custom_endpoint,
+      }),
+    ),
+  );
+  gmStorage.set(AUTHORING_API_KEY_STORAGE_KEY, settings.apiKey);
 }
 
 function storeSealedLocalLesson(storage: Map<string, string>, sealed: ReturnType<typeof sealLesson>) {
@@ -72,6 +101,9 @@ interface StubNode {
   id: string;
   className: string;
   textContent: string;
+  value: string;
+  type: string;
+  placeholder: string;
   title: string;
   tabIndex: number;
   style: Record<string, string>;
@@ -115,6 +147,9 @@ function createHarness(
         for (const child of node.children) child.parent = null;
         node.children = [];
       },
+      value: "",
+      type: "",
+      placeholder: "",
       title: "",
       tabIndex: 0,
       style: {},
@@ -176,6 +211,7 @@ function createHarness(
   const documentElement = makeNode("html");
   const video = { currentTime: 0, playbackRate: 1, played: false, play() { this.played = true; } };
   const storage = sharedStorage ?? new Map<string, string>();
+  const gmStorage = new Map<string, string>();
   const opened: string[] = [];
   const intervals: (() => void)[] = [];
   const location = { pathname: "/watch", search: `?v=${lessonFixture.video.video_id}`, protocol: "https:" };
@@ -262,6 +298,8 @@ function createHarness(
             .catch(() => request.onerror());
         }
       : undefined,
+    GM_getValue: (key: string, fallback = "") => gmStorage.get(key) ?? fallback,
+    GM_setValue: (key: string, value: string) => void gmStorage.set(key, value),
     open: (url: string) => void opened.push(url),
     getSelection: () => ({
       isCollapsed: selectionText.length === 0,
@@ -276,10 +314,20 @@ function createHarness(
       setReadSessionCaptions: (fn: () => { captions?: { start_ms: number; end_ms: number; text: string }[]; error?: string }) => void;
       storeLocalLesson: (lesson: unknown, complete: boolean) => void;
       resolveLocalLesson: (videoId: string) => unknown;
+      loadAuthoringSettings: () => unknown;
+      saveAuthoringSettings: (publicSettings: unknown, apiKey: string) => void;
+      loadApiKey: () => string;
+      saveApiKey: (apiKey: string) => void;
+      publicSettingsForStorage: (publicSettings: unknown) => unknown;
     },
   };
 
-  new Function("window", "document", script)(windowStub, documentStub);
+  new Function("GM_getValue", "GM_setValue", "window", "document", script)(
+    windowStub.GM_getValue,
+    windowStub.GM_setValue,
+    windowStub,
+    documentStub,
+  );
   windowStub.__yspTestHooks = (windowStub as { __yspTestHooks?: typeof windowStub.__yspTestHooks }).__yspTestHooks ?? null;
 
   return {
@@ -287,6 +335,7 @@ function createHarness(
     nodes,
     video,
     storage,
+    gmStorage,
     opened,
     windowStub,
     async flush() {
@@ -784,15 +833,13 @@ describe("library userscript runtime smoke", () => {
       captions: changedCaptions.map((caption) => ({ ...caption })),
       language: "en",
     }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     const regenBtn = harness.nodes.find((node) => node.textContent === "Regenerate lesson");
@@ -872,15 +919,13 @@ describe("library userscript runtime smoke", () => {
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
     }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     expect(harness.createPanel()).not.toBeNull();
@@ -900,15 +945,13 @@ describe("library userscript runtime smoke", () => {
     const videoId = "nocap123456";
     const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US");
     harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({ error: "no_captions" }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     const createBtn = harness.nodes.find((node) => node.textContent === "Create lesson");
@@ -934,15 +977,13 @@ describe("library userscript runtime smoke", () => {
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
     }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
@@ -965,21 +1006,19 @@ describe("library userscript runtime smoke", () => {
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
     }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "bad-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "bad-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
     await harness.flush();
     await harness.flush();
-    expect(harness.createStatus()?.textContent).toContain("API endpoint and key");
+    expect(harness.createStatus()?.textContent).toContain("API key");
     expect(harness.panel()).toBeNull();
 
     harness.navigate(lesson.video.video_id);
@@ -1002,15 +1041,13 @@ describe("library userscript runtime smoke", () => {
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
     }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "http://api.example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "http://api.example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
@@ -1048,15 +1085,13 @@ describe("library userscript runtime smoke", () => {
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
     }));
-    harness.storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.navigate(videoId);
     await harness.flush();
     harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
@@ -1126,16 +1161,14 @@ describe("library userscript runtime smoke", () => {
         { video_id: videoId, study_language: "en", source_digest: enSealed.source_digest, complete: true },
       ]),
     );
-    storage.set(
-      "ysp:authoring:v1",
-      JSON.stringify({
-        endpoint: "https://example.test/v1",
-        apiKey: "test-key",
-        model: "test-model",
-        study_language: "ko",
-      }),
-    );
     const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "custom",
+      custom_endpoint: "https://example.test/v1",
+      apiKey: "test-key",
+      model: "test-model",
+      study_language: "ko",
+    });
     harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
@@ -1147,6 +1180,76 @@ describe("library userscript runtime smoke", () => {
     };
     expect(resolved.lesson.study_language).toBe("ko");
     expect(resolved.lesson.lines[0]!.translation).toBe("ko-t");
+  });
+
+  test("OpenRouter preset calls the default endpoint without storing the key in localStorage", async () => {
+    const videoId = "openrouter01";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Preset line." }]);
+    let requestedUrl = "";
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
+      fetchImpl: (url) => {
+        requestedUrl = String(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
+          }),
+        } as Response);
+      },
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    setAuthoringSettings(harness.storage, harness.gmStorage, {
+      provider: "openrouter",
+      apiKey: "user-only-key",
+      study_language: "ko",
+    });
+    harness.navigate(videoId);
+    await harness.flush();
+    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await harness.flush();
+    await harness.flush();
+    expect(requestedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(harness.storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("user-only-key");
+    expect(harness.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("user-only-key");
+  });
+
+  test("saved settings keep the API key out of lesson JSON and page localStorage", async () => {
+    const videoId = "secret0001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Secret line." }]);
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
+      fetchImpl: () =>
+        Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
+          }),
+        } as Response),
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.navigate(videoId);
+    await harness.flush();
+    const keyInput = harness.nodes.find((node) => node.type === "password");
+    expect(keyInput).toBeDefined();
+    keyInput!.value = "super-secret-key";
+    harness.nodes.find((node) => node.textContent === "Save settings")!.fire("click");
+    await harness.flush();
+    expect(harness.storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("super-secret-key");
+    expect(harness.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("super-secret-key");
+    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await harness.flush();
+    await harness.flush();
+    const lessonKey = localLessonStorageKey(videoId, "ko", captionDigest(captions));
+    const storedLesson = harness.storage.get(lessonKey);
+    expect(storedLesson).toBeDefined();
+    expect(storedLesson!).not.toContain("super-secret-key");
+    expect(keyInput!.value).toBe("");
+    expect(keyInput!.placeholder).toContain("-key");
   });
 
   test("compiled library videos do not show a create panel", async () => {
