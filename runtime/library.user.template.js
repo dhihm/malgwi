@@ -1160,13 +1160,20 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     }
     var local = resolveLocalLesson(videoId);
     if (local && isLessonComplete(local.lesson)) {
-      if (lesson && lesson.video && lesson.video.video_id !== videoId) {
+      unmountCreate();
+      var mountedVideoId = lesson && lesson.video ? lesson.video.video_id : null;
+      if (mountedVideoId !== videoId) {
         unmount();
+      }
+      if (!panel || mountedVideoId !== videoId) {
+        mount(local.lesson, { digestChanged: false });
       }
       sessionDigestDiffers(local.lesson.source_digest, function (changed) {
         if (currentVideoId() !== videoId) return;
-        unmountCreate();
-        mount(local.lesson, { digestChanged: changed === true });
+        var wantBanner = changed === true;
+        if (digestChangedActive !== wantBanner) {
+          mount(local.lesson, { digestChanged: wantBanner });
+        }
       });
       return;
     }

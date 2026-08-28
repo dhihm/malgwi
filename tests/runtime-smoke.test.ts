@@ -56,6 +56,17 @@ function digestBanner(panel: StubNode | null) {
   return null;
 }
 
+function panelContainsText(panel: StubNode | null, text: string) {
+  if (!panel) return false;
+  const queue = [panel];
+  while (queue.length > 0) {
+    const candidate = queue.shift()!;
+    if (candidate.textContent === text) return true;
+    queue.push(...candidate.children);
+  }
+  return false;
+}
+
 interface StubNode {
   tag: string;
   id: string;
@@ -1145,7 +1156,7 @@ describe("library userscript runtime smoke", () => {
     expect(harness.createPanel()).toBeNull();
   });
 
-  test("navigating compiled to local unmounts the stale panel before digest resolves", async () => {
+  test("navigating compiled to local shows the local lesson immediately", async () => {
     const localVideoId = "localvid001";
     const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stored local cue." }]);
     const draft = buildLessonDraft(
@@ -1162,17 +1173,17 @@ describe("library userscript runtime smoke", () => {
     const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
     await harness.flush();
     const compiledOriginal = lesson.lines[0]!.original;
-    expect(harness.nodes.some((node) => node.textContent === compiledOriginal)).toBe(true);
+    expect(panelContainsText(harness.panel(), compiledOriginal)).toBe(true);
 
     harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
       captions: captions.map((caption) => ({ ...caption })),
       language: "en",
     }));
     harness.navigate(localVideoId);
-    expect(harness.panel()).toBeNull();
+    expect(panelContainsText(harness.panel(), compiledOriginal)).toBe(false);
+    expect(panelContainsText(harness.panel(), "Stored local cue.")).toBe(true);
 
     await harness.flush();
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.nodes.some((node) => node.textContent === "Stored local cue.")).toBe(true);
+    expect(panelContainsText(harness.panel(), "Stored local cue.")).toBe(true);
   });
 });
