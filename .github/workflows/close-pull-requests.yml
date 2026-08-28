@@ -1,4 +1,4 @@
-# Pull requests are not accepted in this repository; see CONTRIBUTING.md.
+# External pull requests are not accepted; see CONTRIBUTING.md.
 name: close pull requests
 on:
   pull_request_target:
@@ -7,6 +7,7 @@ permissions:
   pull-requests: write
 jobs:
   close:
+    if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Close with policy comment

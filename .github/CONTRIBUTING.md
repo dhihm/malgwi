@@ -2,7 +2,7 @@
 
 Malgwi is open source under the MIT license, but it is developed solo:
 
-- **Pull requests are not accepted.** They are closed automatically
+- **External pull requests are not accepted.** They are closed automatically
   without review. This keeps a single author responsible for every
   line that ships.
 - **Bug reports and ideas are very welcome** through
