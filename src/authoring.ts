@@ -75,6 +75,20 @@ export interface AuthoringSettings {
   readonly study_language: string;
 }
 
+/** True when the model endpoint uses HTTPS, or HTTP on localhost for dev/tests. */
+export function isAuthoringEndpointAllowed(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol === "https:") return true;
+    if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export interface LocalLessonIndexEntry {
   readonly video_id: string;
   readonly study_language: string;

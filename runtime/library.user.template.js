@@ -40,6 +40,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           digestChanged: "Captions changed since the stored lesson. Regenerate or export the old one.",
           regenerate: "Regenerate lesson",
           needKey: "Set an API endpoint and key in Settings first.",
+          insecureEndpoint: "API endpoint must use HTTPS (http://localhost is allowed for local testing).",
+          incomplete: "Lesson is incomplete. Create again to finish the remaining lines.",
           confirmCall: "Send lines to your model endpoint for this video?",
           saved: "Lesson saved. Study offline from now on." },
     ko: { panel: "말귀", vocab: "단어장", pron: "발음", trans: "번역",
@@ -53,6 +55,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 다시 만들거나 기존 레슨을 내보내세요.",
           regenerate: "레슨 다시 만들기",
           needKey: "설정에서 API 엔드포인트와 키를 먼저 입력하세요.",
+          insecureEndpoint: "API 엔드포인트는 HTTPS여야 합니다(로컬 테스트는 http://localhost 허용).",
+          incomplete: "레슨이 완성되지 않았습니다. 다시 만들기로 남은 줄을 채우세요.",
           confirmCall: "이 영상의 자막 줄을 모델 엔드포인트로 보낼까요?",
           saved: "레슨이 저장되었습니다. 이제 오프라인으로 학습할 수 있습니다." },
     zh: { panel: "Malgwi", vocab: "生词本", pron: "发音", trans: "翻译",
@@ -66,6 +70,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           digestChanged: "字幕已变更，与已存课程不一致。请重新生成或导出旧课程。",
           regenerate: "重新生成课程",
           needKey: "请先在设置中填写 API 端点和密钥。",
+          insecureEndpoint: "API 端点须为 HTTPS（本地测试允许 http://localhost）。",
+          incomplete: "课程未完成。请再次创建以补全剩余行。",
           confirmCall: "将此视频的字幕行发送到您的模型端点？",
           saved: "课程已保存，之后可离线学习。" },
     ja: { panel: "Malgwi", vocab: "単語帳", pron: "発音", trans: "翻訳",
@@ -79,6 +85,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           digestChanged: "保存済みレッスン以降に字幕が変わりました。再生成するか古いレッスンをエクスポートしてください。",
           regenerate: "レッスンを再生成",
           needKey: "設定で API エンドポイントとキーを入力してください。",
+          insecureEndpoint: "API エンドポイントは HTTPS である必要があります（ローカルテストは http://localhost 可）。",
+          incomplete: "レッスンが未完成です。もう一度作成して残りの行を埋めてください。",
           confirmCall: "この動画の字幕行をモデルエンドポイントに送信しますか？",
           saved: "レッスンを保存しました。以降はオフラインで学習できます。" }
   };
@@ -997,6 +1005,11 @@ var LESSONS = /*__LESSONS_JSON__*/null;
       setCreateStatus(text.needKey);
       return;
     }
+    var endpoint = String(settings.endpoint || "").replace(/\/+$/u, "");
+    if (!isAuthoringEndpointAllowed(endpoint)) {
+      setCreateStatus(text.insecureEndpoint);
+      return;
+    }
     var capture = readSessionCaptionsImpl();
     if (capture.error) {
       setCreateStatus(text.noCaptions);
@@ -1018,14 +1031,20 @@ var LESSONS = /*__LESSONS_JSON__*/null;
       .then(function (finished) {
         createBusy = false;
         if (!finished) return;
-        storeLocalLesson(finished, true);
-        setCreateStatus(text.saved);
-        unmountCreate();
-        mount(finished);
+        if (isLessonComplete(finished)) {
+          storeLocalLesson(finished, true);
+          setCreateStatus(text.saved);
+          unmountCreate();
+          mount(finished);
+        } else {
+          storeLocalLesson(finished, false);
+          setCreateStatus(text.incomplete);
+        }
       })
       .catch(function (error) {
         createBusy = false;
         if (error && error.message === "missing_settings") setCreateStatus(text.needKey);
+        else if (error && error.message === "insecure_endpoint") setCreateStatus(text.insecureEndpoint);
         else if (error && error.status === 401) setCreateStatus(text.needKey);
         else setCreateStatus(String(error && error.message ? error.message : error));
       });
@@ -1061,6 +1080,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     }
 
     createStatusEl = document.createElement("div");
+    createStatusEl.id = "ysp-create-status";
     createStatusEl.style.cssText = "font-size:12px;color:" + colors.trans + ";min-height:1.2em;";
     createPanel.appendChild(createStatusEl);
 

@@ -274,6 +274,7 @@ function createHarness(
       nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null,
     createPanel: () =>
       nodes.find((node) => node.id === "ysp-create-panel" && body.contains(node)) ?? null,
+    createStatus: () => nodes.find((node) => node.id === "ysp-create-status") ?? null,
     digestBanner: () => digestBanner(nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null),
   };
 }
@@ -853,5 +854,186 @@ describe("library userscript runtime smoke", () => {
     expect(harness.panel()).not.toBeNull();
     expect(harness.panel()!.children[2]!.children).toHaveLength(2);
     expect(harness.storage.get(LOCAL_LESSON_INDEX_KEY)).toContain(videoId);
+  });
+
+  test("no captions shows a one-line status on the create panel", async () => {
+    const videoId = "nocap123456";
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US");
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({ error: "no_captions" }));
+    harness.storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "https://example.test/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    harness.navigate(videoId);
+    await harness.flush();
+    const createBtn = harness.nodes.find((node) => node.textContent === "Create lesson");
+    createBtn!.fire("click");
+    await harness.flush();
+    expect(harness.createStatus()?.textContent).toBe(
+      "No captions on this page — turn on subtitles first.",
+    );
+  });
+
+  test("confirm cancel sends zero model requests", async () => {
+    const videoId = "confirm0001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "One line." }]);
+    let fetchCalls = 0;
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
+      confirmImpl: () => false,
+      fetchImpl: () => {
+        fetchCalls += 1;
+        return Promise.resolve({ ok: true, json: async () => ({ choices: [] }) } as Response);
+      },
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "https://example.test/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    harness.navigate(videoId);
+    await harness.flush();
+    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await harness.flush();
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("a 401 during create leaves compiled library videos working", async () => {
+    const videoId = "authfail001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Need auth." }]);
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
+      fetchImpl: () =>
+        Promise.resolve({
+          ok: false,
+          status: 401,
+          json: async () => ({}),
+        } as Response),
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "https://example.test/v1",
+        apiKey: "bad-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    harness.navigate(videoId);
+    await harness.flush();
+    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await harness.flush();
+    await harness.flush();
+    expect(harness.createStatus()?.textContent).toContain("API endpoint and key");
+    expect(harness.panel()).toBeNull();
+
+    harness.navigate(lesson.video.video_id);
+    await harness.flush();
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
+  });
+
+  test("rejects non-HTTPS endpoints before any model call", async () => {
+    const videoId = "insecure001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Plain HTTP." }]);
+    let fetchCalls = 0;
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
+      fetchImpl: () => {
+        fetchCalls += 1;
+        return Promise.resolve({ ok: true, json: async () => ({ choices: [] }) } as Response);
+      },
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "http://api.example.test/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    harness.navigate(videoId);
+    await harness.flush();
+    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await harness.flush();
+    expect(fetchCalls).toBe(0);
+    expect(harness.createStatus()?.textContent).toContain("HTTPS");
+  });
+
+  test("incomplete generate keeps a draft and does not mount the study panel", async () => {
+    const videoId = "partial0001";
+    const captions = validateCaptions([
+      { start_ms: 0, end_ms: 1000, text: "Line one." },
+      { start_ms: 1000, end_ms: 2000, text: "Line two." },
+      { start_ms: 2000, end_ms: 3000, text: "Line three." },
+    ]);
+    let fetchCalls = 0;
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
+      fetchImpl: () => {
+        fetchCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  lines: [{ pronunciation: "p1", translation: "t1" }],
+                }),
+              },
+            }],
+          }),
+        } as Response);
+      },
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "https://example.test/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    harness.navigate(videoId);
+    await harness.flush();
+    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await harness.flush();
+    await harness.flush();
+    await harness.flush();
+    expect(fetchCalls).toBe(1);
+    expect(harness.panel()).toBeNull();
+    expect(harness.createPanel()).not.toBeNull();
+    expect(harness.createStatus()?.textContent).toContain("incomplete");
+    const index = JSON.parse(harness.storage.get(LOCAL_LESSON_INDEX_KEY)!);
+    expect(index).toHaveLength(1);
+    expect(index[0]!.complete).toBe(false);
+
+    harness.navigate(videoId);
+    await harness.flush();
+    expect(harness.panel()).toBeNull();
+    expect(harness.createPanel()).not.toBeNull();
   });
 });

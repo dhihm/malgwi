@@ -82,6 +82,19 @@ function isLessonComplete(lesson) {
   return true;
 }
 
+function isAuthoringEndpointAllowed(endpoint) {
+  try {
+    var url = new URL(endpoint);
+    if (url.protocol === "https:") return true;
+    if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) {
+      return true;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
 function loadAuthoringSettings() {
   try {
     var value = JSON.parse(window.localStorage.getItem(AUTHORING_SETTINGS_KEY) || "{}");
@@ -302,6 +315,7 @@ function callModelBatch(settings, lesson, indices, retry) {
   var apiKey = String(settings.apiKey || "");
   var model = String(settings.model || "gpt-4o-mini");
   if (!endpoint || !apiKey) return Promise.reject(new Error("missing_settings"));
+  if (!isAuthoringEndpointAllowed(endpoint)) return Promise.reject(new Error("insecure_endpoint"));
   var prompt = authoringPromptForBatch(lesson, indices);
   return window.fetch(endpoint + "/chat/completions", {
     method: "POST",
