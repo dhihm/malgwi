@@ -1,0 +1,227 @@
+/**
+ * Watch-page lesson authoring: local storage keys, caption-to-lesson
+ * conversion, model batching, and field merge. Shared by tests and the
+ * compiler when embedding the authoring runtime module.
+ */
+import {
+  type CaptionLine,
+  captionDigest,
+  type GlossaryEntry,
+  type LessonLine,
+  type LessonV2,
+  type LessonVideo,
+  validateCaptions,
+  validateLesson,
+} from "./lesson.ts";
+
+export const LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
+export const LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
+export const AUTHORING_SETTINGS_KEY = "ysp:authoring:v1";
+
+/** Default cap on lines sent to the model in one generate action. */
+export const DEFAULT_LINE_CAP = 200;
+/** Lines per model request when batching. */
+export const DEFAULT_BATCH_SIZE = 40;
+
+export interface AuthoringSettings {
+  readonly endpoint: string;
+  readonly apiKey: string;
+  readonly model: string;
+  readonly study_language: string;
+}
+
+export interface LocalLessonIndexEntry {
+  readonly video_id: string;
+  readonly study_language: string;
+  readonly source_digest: string;
+  readonly complete: boolean;
+}
+
+export interface ModelLineFields {
+  readonly pronunciation: string;
+  readonly translation: string;
+  readonly sentence_end?: boolean;
+}
+
+export interface ModelBatchResponse {
+  readonly lines: readonly ModelLineFields[];
+  readonly glossary?: readonly GlossaryEntry[];
+}
+
+/** Storage key for one sealed local lesson document. */
+export function localLessonStorageKey(
+  videoId: string,
+  studyLanguage: string,
+  sourceDigest: string,
+): string {
+  return `${LOCAL_LESSON_PREFIX}${videoId}:${studyLanguage}:${sourceDigest}`;
+}
+
+/** Split line indices into batches for model calls. */
+export function batchIndices(lineCount: number, batchSize: number, lineCap: number): number[][] {
+  const capped = Math.min(lineCount, lineCap);
+  const batches: number[][] = [];
+  for (let start = 0; start < capped; start += batchSize) {
+    const end = Math.min(start + batchSize, capped);
+    const batch: number[] = [];
+    for (let index = start; index < end; index += 1) batch.push(index);
+    batches.push(batch);
+  }
+  return batches;
+}
+
+/** Build a lesson draft from captured captions; model fields start empty. */
+export function buildLessonDraft(
+  captions: readonly CaptionLine[],
+  video: LessonVideo,
+  studyLanguage: string,
+): LessonV2 {
+  const validated = validateCaptions(captions);
+  const digest = captionDigest(validated);
+  const lines: LessonLine[] = validated.map((caption) => ({
+    start_ms: caption.start_ms,
+    end_ms: caption.end_ms,
+    original: caption.text,
+    pronunciation: "",
+    translation: "",
+  }));
+  return {
+    schema_version: 2,
+    video,
+    study_language: studyLanguage,
+    source_digest: digest,
+    lines,
+  };
+}
+
+/** Validate and seal a completed local lesson for storage and replay. */
+export function sealLesson(lesson: LessonV2): LessonV2 {
+  if (!isLessonComplete(lesson)) throw new Error("lesson is incomplete");
+  return validateLesson(lesson);
+}
+
+/** True when every line has non-empty pronunciation and translation. */
+export function isLessonComplete(lesson: LessonV2): boolean {
+  return lesson.lines.every((line) => line.pronunciation.length > 0 && line.translation.length > 0);
+}
+
+/**
+ * Merge one model batch into a draft. Returns a new lesson; originals and
+ * timecodes are never changed. Partial batches leave trailing lines empty.
+ */
+export function mergeModelBatch(
+  lesson: LessonV2,
+  startIndex: number,
+  response: ModelBatchResponse,
+): LessonV2 {
+  const lines = lesson.lines.map((line) => ({ ...line }));
+  for (const [offset, fields] of response.lines.entries()) {
+    const index = startIndex + offset;
+    if (index >= lines.length) break;
+    lines[index] = {
+      ...lines[index]!,
+      pronunciation: fields.pronunciation,
+      translation: fields.translation,
+      ...(fields.sentence_end !== undefined ? { sentence_end: fields.sentence_end } : {}),
+    };
+  }
+  const glossary = response.glossary?.length
+    ? response.glossary
+    : lesson.glossary;
+  const merged: LessonV2 = {
+    ...lesson,
+    lines,
+    ...(glossary !== undefined ? { glossary } : {}),
+  };
+  return isLessonComplete(merged) ? sealLesson(merged) : merged;
+}
+
+/** Parse model JSON; rejects unknown keys and edits to originals. */
+export function parseModelBatchResponse(value: unknown, expectedCount: number): ModelBatchResponse {
+  const root = value as Record<string, unknown>;
+  if (typeof root !== "object" || root === null || Array.isArray(root)) {
+    throw new Error("model response must be an object");
+  }
+  if (!Array.isArray(root.lines)) throw new Error("model response.lines must be an array");
+  const lines: ModelLineFields[] = [];
+  for (const [index, raw] of root.lines.slice(0, expectedCount).entries()) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new Error(`model response.lines[${index}] must be an object`);
+    }
+    const record = raw as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!["pronunciation", "translation", "sentence_end"].includes(key)) {
+        throw new Error(`model response.lines[${index}] has unknown key "${key}"`);
+      }
+    }
+    if (typeof record.pronunciation !== "string" || record.pronunciation.length === 0) {
+      throw new Error(`model response.lines[${index}].pronunciation must be a non-empty string`);
+    }
+    if (typeof record.translation !== "string" || record.translation.length === 0) {
+      throw new Error(`model response.lines[${index}].translation must be a non-empty string`);
+    }
+    if (record.sentence_end !== undefined && typeof record.sentence_end !== "boolean") {
+      throw new Error(`model response.lines[${index}].sentence_end must be a boolean when present`);
+    }
+    lines.push({
+      pronunciation: record.pronunciation,
+      translation: record.translation,
+      ...(record.sentence_end !== undefined ? { sentence_end: record.sentence_end as boolean } : {}),
+    });
+  }
+  let glossary: GlossaryEntry[] | undefined;
+  if (root.glossary !== undefined) {
+    if (!Array.isArray(root.glossary)) throw new Error("model response.glossary must be an array");
+    glossary = [];
+    for (const [index, raw] of root.glossary.entries()) {
+      if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw new Error(`model response.glossary[${index}] must be an object`);
+      }
+      const entry = raw as Record<string, unknown>;
+      if (Object.keys(entry).some((key) => key !== "word" && key !== "meaning")) {
+        throw new Error(`model response.glossary[${index}] has unknown keys`);
+      }
+      if (typeof entry.word !== "string" || typeof entry.meaning !== "string") {
+        throw new Error(`model response.glossary[${index}] needs word and meaning strings`);
+      }
+      glossary.push({ word: entry.word, meaning: entry.meaning });
+    }
+  }
+  return { lines, ...(glossary !== undefined ? { glossary } : {}) };
+}
+
+/** Fixed prompt fragment listing originals the model must not edit. */
+export function authoringPromptForBatch(
+  lesson: LessonV2,
+  indices: readonly number[],
+): { system: string; user: string } {
+  const originals = indices.map((index) => {
+    const line = lesson.lines[index]!;
+    return { index, original: line.original, start_ms: line.start_ms, end_ms: line.end_ms };
+  });
+  const system =
+    "You author study fields for a language-learning lesson. " +
+    "Return JSON only: {\"lines\":[{\"pronunciation\":\"…\",\"translation\":\"…\",\"sentence_end\":true|false?},…],\"glossary\":[{\"word\":\"…\",\"meaning\":\"…\"}]?}. " +
+    "Fill pronunciation (source speech in the learner's script) and translation (learner's language). " +
+    "Optional sentence_end marks sentence boundaries. Optional glossary lists lowercase vocabulary meanings. " +
+    "Never change original text or timecodes. Never output HTML or JavaScript.";
+  const user =
+    `Study language: ${lesson.study_language}\nSource language: ${lesson.video.source_language}\n` +
+    `Lines:\n${JSON.stringify(originals)}`;
+  return { system, user };
+}
+
+/** Update the local-lesson index after storing a document. */
+export function upsertLocalLessonIndex(
+  index: LocalLessonIndexEntry[],
+  entry: LocalLessonIndexEntry,
+): LocalLessonIndexEntry[] {
+  const filtered = index.filter(
+    (candidate) =>
+      !(
+        candidate.video_id === entry.video_id &&
+        candidate.study_language === entry.study_language
+      ),
+  );
+  return [...filtered, entry];
+}
