@@ -32,11 +32,12 @@ Everything runs locally in your browser. No account, no server, no AI
 at view time, and nothing leaves your machine.
 
 > **Malgwi is not a live translator.** Lessons are prepared **per
-> video, ahead of time**: a host (typically an AI agent you run)
-> translates the subtitles once, and the result is compiled into your
-> userscript. The panel appears only on videos you have prepared —
-> on any other video, nothing shows. One-time preparation per video,
-> then unlimited offline-quality studying.
+> video, ahead of time**: you author them once with
+> [`bun compiler/author.ts`](#author) (or any host that calls the same
+> toolkit), then compile into your userscript. The study panel appears
+> on prepared videos; on any other video you get a short
+> *not in your library* notice — not a create form. One-time
+> preparation per video, then unlimited offline-quality studying.
 
 ---
 
@@ -67,9 +68,11 @@ file updates everything.
 ### 3. Open the video on YouTube
 
 Visit the video on `youtube.com` as usual. The Malgwi panel appears on
-the right for any video in your library, and disappears on videos you
-have not studied. Switching between videos just works — the panel
-follows YouTube's in-page navigation.
+the right for any video in your library. On videos you have not
+prepared, a short status notice appears instead — the userscript is
+playback-only and does not author lessons in the browser. Switching
+between videos just works — the panel follows YouTube's in-page
+navigation.
 
 ### The study loop
 
@@ -77,8 +80,15 @@ Adding a video to your library is a one-time preparation:
 
 1. Pick a video and get its subtitles as a file (see
    [Getting subtitles](#getting-subtitles)).
-2. Have your host build the lesson — translate, build, and refresh the
-   library userscript (see [Building lessons](#building-lessons)).
+2. Author the lesson and rebuild the library userscript (see
+   [Building lessons](#building-lessons)):
+
+   ```sh
+   export OPENROUTER_API_KEY=…
+   bun compiler/author.ts --captions capture.vtt --video-id VIDEO --study-language ko
+   bun compiler/build.ts --library study-library.user.js lesson.json
+   ```
+
 3. Replace your installed `study-library.user.js` with the rebuilt one.
 4. Study: every prepared video now shows the panel, forever, with no
    further cost.
@@ -107,24 +117,30 @@ Vocabulary entries and panel placement live in your browser's
 
 ## Building lessons
 
-Malgwi deliberately contains **no AI and no network code**. It is the
-deterministic half of a two-part system:
+Preparation is a two-step loop on your machine; playback stays
+offline in the browser.
 
-1. **A host** (an AI agent you run, or any script) captures subtitles
-   from a file you provide and authors the `pronunciation` and
-   `translation` fields — typically with a language model.
-2. **This toolkit** validates the lesson, binds the original text to
-   the capture with a SHA-256 digest so it cannot be silently altered,
-   and compiles the static artifacts.
+1. **Author** — [`compiler/author.ts`](#author) reads a local caption
+   file, calls a language model once to fill `pronunciation` and
+   `translation`, and writes sealed `lesson-v2` JSON. Credentials come
+   from the environment only; the key is never written into lesson
+   JSON, logs, or the userscript.
+2. **Compile** — [`compiler/build.ts`](#compile) validates the lesson,
+   binds the original text to the capture with a SHA-256 digest so it
+   cannot be silently altered, and emits static artifacts. No model
+   calls; same input yields byte-identical output.
+
+The watch-page library userscript is playback-only (`@grant none`): no
+model HTTP, no API key UI. Other hosts or scripts can call the same
+[`src/authoring.ts`](src/authoring.ts) toolkit; this repo ships the
+CLI as the first-class path.
 
 ```
-subtitles (.vtt/.srt/json)          lesson-v2 JSON            static artifacts
-        │  capture                        │  compile                 │
-        └────────► originals + digest ────┴──► index.html            │
-                        ▲                      study.user.js  ◄──────┘
-   model authors only:  │                      study-library.user.js
-   pronunciation,       │
-   translation ─────────┘
+subtitles (.vtt/.srt/json)     author CLI              lesson-v2 JSON       compile
+        │                         │                         │                  │
+        └──── parse + digest ─────┴──► pronunciation, ──────┴──► index.html   │
+                                      translation                 study.user.js │
+                                                                study-library.user.js
 ```
 
 ### The lesson-v2 document
@@ -163,6 +179,31 @@ Rules that make a lesson trustworthy:
 - See [`fixtures/lesson.sample.json`](fixtures/lesson.sample.json) for
   a complete synthetic example.
 
+### Author
+
+Requires [Bun](https://bun.sh) and an API key in the environment.
+The CLI refuses `--api-key`; set `OPENROUTER_API_KEY` or
+`OPENAI_API_KEY` instead. Optional overrides:
+`OPENROUTER_BASE_URL` / `OPENAI_BASE_URL` (and `OPENROUTER_MODEL` /
+`OPENAI_MODEL` for the default model).
+
+Required flags:
+
+- `--captions` — local `.vtt`, `.srt`, or neutral JSON capture
+- `--video-id` — YouTube video id
+- `--study-language` — BCP-47-ish tag for the learner (e.g. `ko`)
+
+Optional flags: `--source-language` (default `en`), `--title`,
+`--output` (default `lesson.json`), `--model`.
+
+```sh
+export OPENROUTER_API_KEY=…
+bun compiler/author.ts --captions capture.vtt --video-id VIDEO --study-language ko
+bun compiler/build.ts --library study-library.user.js lesson.json
+```
+
+(`bun run author -- …` runs the same entry point.)
+
 ### Compile
 
 Requires [Bun](https://bun.sh).
@@ -200,14 +241,17 @@ gracefully to a floating video window driven by the same jump buttons.
 ## FAQ
 
 **Why doesn't the panel appear on some video?**
-It is not in your library. Malgwi only knows the videos whose lessons
-were prepared and compiled into your userscript — prepare the video
-(see [the study loop](#the-study-loop)) and rebuild the library.
+It is not in your library. You may see a short *not in your library*
+status instead of the study panel — there is no in-browser create form.
+Prepare the video with [`bun compiler/author.ts`](#author), rebuild the
+library (see [the study loop](#the-study-loop)), and reinstall the
+userscript.
 
 **Can it translate any video live?**
-No, by design. Translation happens once at build time, with whatever
-model your host uses; at view time there is no AI, no network, and no
-API key. That is what keeps studying free, fast, and private.
+No, by design. Translation happens once when you run
+[`bun compiler/author.ts`](#author); at view time the userscript does
+no model HTTP and holds no API key. That is what keeps studying free,
+fast, and private.
 
 **Do my vocabulary words leave my browser?**
 No. Vocabulary and panel settings live in your browser's
@@ -222,7 +266,12 @@ No. Vocabulary and panel settings live in your browser's
 - `runtime/` — the three pinned templates (page, per-video userscript,
   library userscript); no build step, the compiler injects escaped JSON
   into a fixed slot
-- `compiler/build.ts` — deterministic builders and the CLI
+- `compiler/author.ts` — local CLI that authors sealed lesson-v2 from
+  caption files (model calls; credentials from the environment only)
+- `compiler/build.ts` — deterministic builders and the compile CLI
+- `src/authoring.ts` — caption-to-lesson conversion and model batching
+  (shared by the author CLI and tests)
+- `src/captions.ts` — parse `.vtt` / `.srt` / JSON caption files
 - `src/lesson.ts` — validation, canonicalization, digests, injection
   (zero dependencies)
 - `scripts/pin.ts` — emits the commit + SHA-256 pin record a host embeds
