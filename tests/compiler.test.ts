@@ -3,19 +3,11 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildLessonPage, buildLibraryScript } from "../compiler/build.ts";
-import { prepareAuthoringModule } from "../src/authoring.ts";
-import { compileLibrary, compilePage, LESSON_SLOT, LESSONS_SLOT, AUTHORING_SLOT, LessonValidationError, validateLesson } from "../src/lesson.ts";
+import { compileLibrary, compilePage, LESSON_SLOT, LESSONS_SLOT, LessonValidationError, validateLesson } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/index.template.html", import.meta.url), "utf8");
 const userscript = readFileSync(new URL("../runtime/study.user.template.js", import.meta.url), "utf8");
 const libraryTemplate = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
-const authoringModule = prepareAuthoringModule(
-  readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
-);
-const testAuthoringModule = prepareAuthoringModule(
-  readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
-  { testHooks: true },
-);
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
 
 describe("runtime template contract", () => {
@@ -62,39 +54,31 @@ describe("runtime template contract", () => {
     }
   });
 
-  test("library userscript merges every studied video into one install", () => {
+  test("library userscript is playback-only with no model grants", () => {
     expect(libraryTemplate.split(LESSONS_SLOT)).toHaveLength(2);
-    expect(libraryTemplate.split(AUTHORING_SLOT)).toHaveLength(2);
     expect(libraryTemplate).toContain("// ==UserScript==");
-    expect(libraryTemplate).toContain("@name         Malgwi Panel");
-    expect(libraryTemplate).toContain("@inject-into  content");
-    expect(libraryTemplate).toContain("GM_xmlhttpRequest");
-    expect(libraryTemplate).toContain("GM.setValue");
-    expect(libraryTemplate).toContain("GM.getValue");
-    expect(libraryTemplate).not.toContain("@connect");
-    expect(libraryTemplate).not.toContain("window.prompt");
+    expect(libraryTemplate).toContain("@grant        none");
+    expect(libraryTemplate).not.toContain("GM_xmlhttpRequest");
+    expect(libraryTemplate).not.toContain("GM.setValue");
+    expect(libraryTemplate).not.toContain("GM.getValue");
+    expect(libraryTemplate).not.toContain("Create lesson");
+    expect(libraryTemplate).not.toContain("Regenerate");
+    expect(libraryTemplate).toContain("notInLibrary");
     expect(libraryTemplate).not.toContain("innerHTML");
     const other = structuredClone(lessonFixture);
     other.video.video_id = "zzz999AAA_-";
-    const script = compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(other)], authoringModule);
+    const script = compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(other)]);
     expect(script).toContain("abc123XYZ_-");
     expect(script).toContain("zzz999AAA_-");
-    expect(script).toContain("Create lesson");
-    expect(script).not.toContain("__yspTestHooks");
     expect(() =>
-      compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(lessonFixture)], authoringModule),
+      compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(lessonFixture)]),
     ).toThrow(/duplicate/u);
-    expect(() => compileLibrary(libraryTemplate, [], authoringModule)).toThrow(LessonValidationError);
+    expect(() => compileLibrary(libraryTemplate, [])).toThrow(LessonValidationError);
     const dir = mkdtempSync(join(tmpdir(), "ysp-lib-"));
     const first = buildLibraryScript([lessonFixture, other], join(dir, "a", "library.user.js"));
     const second = buildLibraryScript([lessonFixture, other], join(dir, "b", "library.user.js"));
     expect(first.lessonCount).toBe(2);
     expect(first.libraryDigest).toBe(second.libraryDigest);
-  });
-
-  test("test-only hooks are available when explicitly requested", () => {
-    const script = compileLibrary(libraryTemplate, [validateLesson(lessonFixture)], testAuthoringModule);
-    expect(script).toContain("__yspTestHooks");
   });
 
   test("supports the standalone sheet mode", () => {

@@ -5,105 +5,18 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import {
-  AUTHORING_API_KEY_STORAGE_KEY,
-  AUTHORING_SETTINGS_KEY,
-  buildLessonDraft,
-  localLessonStorageKey,
-  prepareAuthoringModule,
-  publicSettingsForStorage,
-  normalizeProvider,
-  sealLesson,
-  upsertLocalLessonIndex,
-  LOCAL_LESSON_INDEX_KEY,
-} from "../src/authoring.ts";
-import { compileLibrary, validateLesson } from "../src/lesson.ts";
-import { captionDigest, validateCaptions } from "../src/lesson.ts";
+import { webcrypto } from "node:crypto";
+import { buildLessonDraft, sealLesson } from "../src/authoring.ts";
+import { compileLibrary, validateCaptions, validateLesson } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
-const authoringModule = prepareAuthoringModule(
-  readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
-  { testHooks: true },
-);
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
-
-function compileLibraryScript(lessons: ReturnType<typeof validateLesson>[]) {
-  return compileLibrary(template, lessons, authoringModule);
-}
-
-function setAuthoringSettings(
-  storage: Map<string, string>,
-  gmStorage: Map<string, string>,
-  settings: {
-    provider?: string;
-    apiKey: string;
-    model?: string;
-    study_language?: string;
-    custom_endpoint?: string;
-  },
-) {
-  storage.set(
-    AUTHORING_SETTINGS_KEY,
-    JSON.stringify(
-      publicSettingsForStorage({
-        provider: normalizeProvider(settings.provider),
-        model: settings.model,
-        study_language: settings.study_language ?? "ko",
-        custom_endpoint: settings.custom_endpoint,
-      }),
-    ),
-  );
-  gmStorage.set(AUTHORING_API_KEY_STORAGE_KEY, settings.apiKey);
-}
-
-function storeSealedLocalLesson(storage: Map<string, string>, sealed: ReturnType<typeof sealLesson>) {
-  storage.set(
-    localLessonStorageKey(sealed.video.video_id, sealed.study_language, sealed.source_digest),
-    JSON.stringify(sealed),
-  );
-  storage.set(
-    LOCAL_LESSON_INDEX_KEY,
-    JSON.stringify(
-      upsertLocalLessonIndex([], {
-        video_id: sealed.video.video_id,
-        study_language: sealed.study_language,
-        source_digest: sealed.source_digest,
-        complete: true,
-      }),
-    ),
-  );
-}
-
-function digestBanner(panel: StubNode | null) {
-  if (!panel) return null;
-  const queue = [...panel.children];
-  while (queue.length > 0) {
-    const candidate = queue.shift()!;
-    if (candidate.attrs["data-ysp"] === "digest-banner") return candidate;
-    queue.push(...candidate.children);
-  }
-  return null;
-}
-
-function panelContainsText(panel: StubNode | null, text: string) {
-  if (!panel) return false;
-  const queue = [panel];
-  while (queue.length > 0) {
-    const candidate = queue.shift()!;
-    if (candidate.textContent === text) return true;
-    queue.push(...candidate.children);
-  }
-  return false;
-}
 
 interface StubNode {
   tag: string;
   id: string;
   className: string;
   textContent: string;
-  value: string;
-  type: string;
-  placeholder: string;
   title: string;
   tabIndex: number;
   style: Record<string, string>;
@@ -128,7 +41,7 @@ function createHarness(
   script: string,
   sharedStorage?: Map<string, string>,
   uiLanguage = "ko-KR",
-  options: { fetchImpl?: typeof fetch; confirmImpl?: () => boolean; gmXhr?: boolean; gmApi?: "underscore" | "dotted" | "none" } = {},
+  options: { textTracks?: { mode: string; language: string; cues: { startTime: number; endTime: number; text: string }[] }[] } = {},
 ) {
   const nodes: StubNode[] = [];
 
@@ -147,9 +60,6 @@ function createHarness(
         for (const child of node.children) child.parent = null;
         node.children = [];
       },
-      value: "",
-      type: "",
-      placeholder: "",
       title: "",
       tabIndex: 0,
       style: {},
@@ -209,37 +119,19 @@ function createHarness(
 
   const body = makeNode("body");
   const documentElement = makeNode("html");
-  const video = { currentTime: 0, playbackRate: 1, played: false, play() { this.played = true; } };
+  const video = {
+    currentTime: 0,
+    playbackRate: 1,
+    played: false,
+    textTracks: options.textTracks ?? [],
+    play() { this.played = true; },
+  };
   const storage = sharedStorage ?? new Map<string, string>();
-  const gmStorage = new Map<string, string>();
   const opened: string[] = [];
   const intervals: (() => void)[] = [];
   const location = { pathname: "/watch", search: `?v=${lessonFixture.video.video_id}`, protocol: "https:" };
   let selectionText = "";
   let selectionAnchor: StubNode | null = null;
-  const confirmImpl = options.confirmImpl ?? (() => true);
-  const fetchImpl = options.fetchImpl ?? (() => Promise.reject(new Error("fetch disabled in tests")));
-  const useGmXhr = options.gmXhr !== false;
-  const gmApi = options.gmApi ?? "underscore";
-
-  async function sha256Hex(text: string) {
-    const { createHash } = await import("node:crypto");
-    return createHash("sha256").update(text, "utf8").digest("hex");
-  }
-
-  const cryptoStub = {
-    subtle: {
-      digest(_algo: string, data: Uint8Array) {
-        return sha256Hex(new TextDecoder().decode(data)).then((hex) => {
-          const bytes = new Uint8Array(hex.length / 2);
-          for (let index = 0; index < bytes.length; index += 1) {
-            bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-          }
-          return bytes.buffer;
-        });
-      },
-    },
-  };
 
   const documentListeners: Record<string, ((event: unknown) => void)[]> = {};
   const documentStub = {
@@ -256,7 +148,6 @@ function createHarness(
 
   const windowStub = {
     location, 
-    crypto: cryptoStub,
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => void storage.set(key, value),
@@ -268,39 +159,9 @@ function createHarness(
     },
     clearInterval: () => {},
     setTimeout: (handler: () => void) => {
-      queueMicrotask(handler);
+      handler();
       return 1;
     },
-    confirm: () => confirmImpl(),
-    fetch: fetchImpl,
-    GM_xmlhttpRequest: useGmXhr
-      ? (request: {
-          method?: string;
-          url: string;
-          headers?: Record<string, string>;
-          data?: string;
-          onload: (response: { status: number; response: unknown }) => void;
-          onerror: () => void;
-        }) => {
-          fetchImpl(request.url, {
-            method: request.method || "GET",
-            headers: request.headers,
-            body: request.data,
-          })
-            .then(async (response) => {
-              let body: unknown = null;
-              try {
-                body = await response.json();
-              } catch {
-                body = null;
-              }
-              request.onload({ status: response.status, response: body });
-            })
-            .catch(() => request.onerror());
-        }
-      : undefined,
-    GM_getValue: (key: string, fallback = "") => gmStorage.get(key) ?? fallback,
-    GM_setValue: (key: string, value: string) => void gmStorage.set(key, value),
     open: (url: string) => void opened.push(url),
     getSelection: () => ({
       isCollapsed: selectionText.length === 0,
@@ -311,56 +172,17 @@ function createHarness(
     innerWidth: 1280,
     innerHeight: 800,
     navigator: { language: uiLanguage },
-    __yspTestHooks: null as null | {
-      setReadSessionCaptions: (fn: () => { captions?: { start_ms: number; end_ms: number; text: string }[]; error?: string }) => void;
-      storeLocalLesson: (lesson: unknown, complete: boolean) => void;
-      resolveLocalLesson: (videoId: string) => unknown;
-      loadAuthoringSettings: () => unknown;
-      saveAuthoringSettings: (publicSettings: unknown, apiKey: string) => void;
-      loadApiKey: () => string;
-      saveApiKey: (apiKey: string) => void;
-      hydrateApiKey: (done?: () => void) => void;
-      publicSettingsForStorage: (publicSettings: unknown) => unknown;
-    },
+    crypto: webcrypto,
   };
 
-  const dottedGM = {
-    getValue: (key: string, fallback = "") => Promise.resolve(gmStorage.get(key) ?? fallback),
-    setValue: (key: string, value: string) => {
-      gmStorage.set(key, value);
-      return Promise.resolve();
-    },
-  };
-  const previousGM = (globalThis as { GM?: unknown }).GM;
-  if (gmApi === "dotted") {
-    (globalThis as { GM?: unknown }).GM = dottedGM;
-  } else {
-    delete (globalThis as { GM?: unknown }).GM;
-  }
-  new Function("GM_getValue", "GM_setValue", "window", "document", script)(
-    gmApi === "underscore" ? windowStub.GM_getValue : undefined,
-    gmApi === "underscore" ? windowStub.GM_setValue : undefined,
-    windowStub,
-    documentStub,
-  );
-  if (gmApi !== "dotted") {
-    (globalThis as { GM?: unknown }).GM = previousGM;
-  }
-  windowStub.__yspTestHooks = (windowStub as { __yspTestHooks?: typeof windowStub.__yspTestHooks }).__yspTestHooks ?? null;
+  new Function("window", "document", script)(windowStub, documentStub);
 
   return {
     body,
     nodes,
     video,
     storage,
-    gmStorage,
     opened,
-    windowStub,
-    async flush() {
-      for (let index = 0; index < 8; index += 1) {
-        await new Promise<void>((resolve) => queueMicrotask(resolve));
-      }
-    },
     select(text: string, anchor: StubNode) {
       selectionText = text;
       selectionAnchor = anchor;
@@ -379,10 +201,8 @@ function createHarness(
     },
     panel: () =>
       nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null,
-    createPanel: () =>
-      nodes.find((node) => node.id === "ysp-create-panel" && body.contains(node)) ?? null,
-    createStatus: () => nodes.find((node) => node.id === "ysp-create-status") ?? null,
-    digestBanner: () => digestBanner(nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null),
+    statusPanel: () =>
+      nodes.find((node) => node.id === "ysp-status-panel" && body.contains(node)) ?? null,
   };
 }
 
@@ -391,7 +211,7 @@ describe("library userscript runtime smoke", () => {
     ...lessonFixture,
     glossary: [{ word: "town", meaning: "마을, 동네" }],
   });
-  const script = compileLibraryScript([lesson]);
+  const script = compileLibrary(template, [lesson]);
 
   test("mounts a localized panel with one row per line", () => {
     const harness = createHarness(script);
@@ -426,7 +246,7 @@ describe("library userscript runtime smoke", () => {
         { start_ms: 0, end_ms: 1500, original: "Hello again.", pronunciation: "헬로 어겐.", translation: "다시 안녕." },
       ],
     });
-    const harness = createHarness(compileLibraryScript([lesson, other]));
+    const harness = createHarness(compileLibrary(template, [lesson, other]));
 
     // Mounted for the first video with its line count.
     expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
@@ -436,10 +256,9 @@ describe("library userscript runtime smoke", () => {
     expect(harness.panel()!.children[2]!.children).toHaveLength(1);
     expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Hello again.");
 
-    // Navigate to a video that is not in the library: create-lesson panel appears.
+    // Navigate to a video that is not in the library: panel unmounts.
     harness.navigate("unstudied123".slice(0, 11));
     expect(harness.panel()).toBeNull();
-    expect(harness.createPanel()).not.toBeNull();
 
     // And back to the first video: panel returns.
     harness.navigate(lesson.video.video_id);
@@ -611,7 +430,7 @@ describe("library userscript runtime smoke", () => {
         { start_ms: 3600, end_ms: 5000, original: ">> There's a good balance.", pronunciation: "p2", translation: "t2" },
       ],
     });
-    const harness = createHarness(compileLibraryScript([fragmented]));
+    const harness = createHarness(compileLibrary(template, [fragmented]));
     const list = harness.panel()!.children[2]!;
     const repeatOnSecondCue = list.children[1]!.children[0]!.children[1]!;
 
@@ -647,7 +466,7 @@ describe("library userscript runtime smoke", () => {
         { start_ms: 3500, end_ms: 5000, original: "Smith continued", pronunciation: "p2", translation: "t2" },
       ],
     });
-    const harness = createHarness(compileLibraryScript([flagged]));
+    const harness = createHarness(compileLibrary(template, [flagged]));
     const list = harness.panel()!.children[2]!;
 
     // Line 0 stands alone: repeating it never pulls in line 1.
@@ -666,7 +485,7 @@ describe("library userscript runtime smoke", () => {
     expect(harness.video.currentTime).toBeCloseTo(2.0);
   });
 
-  test("dragging a word captures it with gloss, examples, and dictionary link", async () => {
+  test("dragging a word captures it with gloss, examples, and dictionary link", () => {
     const harness = createHarness(script);
     const panel = harness.panel()!;
     const list = panel.children[2]!;
@@ -674,7 +493,6 @@ describe("library userscript runtime smoke", () => {
     // Simulate selecting "town" inside the list, then confirm the popup.
     harness.select("Town, ", list.children[2]!);
     list.fire("mouseup", { clientX: 100, clientY: 100 });
-    await harness.flush();
     const addButton = harness.nodes.find((node) => node.textContent.startsWith("+ 단어장: "));
     expect(addButton).toBeDefined();
     expect(addButton!.textContent).toBe("+ 단어장: town");
@@ -703,114 +521,42 @@ describe("library userscript runtime smoke", () => {
     expect(harness.storage.get("ysp:vocab:v1")).not.toContain('"town"');
   });
 
-  test("a stored local lesson mounts the study panel without fetch", async () => {
-    const videoId = "local000ABC";
-    const captions = validateCaptions([
-      { start_ms: 0, end_ms: 1000, text: "Offline line." },
-    ]);
-    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "오프", translation: "오프라인 줄." }],
-    });
-    const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    const harness = createHarness(compileLibraryScript([lesson]), storage);
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(videoId);
-    await harness.flush();
-    expect(harness.createPanel()).toBeNull();
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.digestBanner()).toBeNull();
-    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Offline line.");
+  test("unknown videos show a short not-in-library status", () => {
+    const harness = createHarness(script);
+    harness.navigate("unstudied123".slice(0, 11));
+    expect(harness.panel()).toBeNull();
+    expect(harness.statusPanel()).not.toBeNull();
+    expect(harness.statusPanel()!.textContent).toBe("이 영상은 Malgwi 라이브러리에 없습니다.");
   });
 
-  test("revisit with matching session captions stays offline without a digest banner", async () => {
-    const videoId = "digest00001";
-    const captions = validateCaptions([
-      { start_ms: 0, end_ms: 1000, text: "Still the same cue." },
-    ]);
-    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "p", translation: "t" }],
-    });
-    expect(sealed.source_digest).toBe(captionDigest(captions));
-    const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(videoId);
-    await harness.flush();
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.digestBanner()).toBeNull();
-    expect(harness.createPanel()).toBeNull();
-  });
-
-  test("revisit detects caption digest changes and keeps the stored lesson visible", async () => {
-    const videoId = "digest00002";
-    const storedCaptions = validateCaptions([
-      { start_ms: 0, end_ms: 1000, text: "Original stored cue." },
-    ]);
+  test("stored local lessons still mount the study panel", () => {
+    const videoId = "localvid001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stored local cue." }]);
     const draft = buildLessonDraft(
-      storedCaptions,
+      captions,
       { provider: "youtube", video_id: videoId, source_language: "en" },
       "ko",
     );
     const sealed = sealLesson({
       ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "stored", translation: "저장됨" }],
-    });
-    const changedCaptions = validateCaptions([
-      { start_ms: 0, end_ms: 1000, text: "Updated player cue." },
-    ]);
-    expect(captionDigest(changedCaptions)).not.toBe(sealed.source_digest);
-    const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: changedCaptions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(videoId);
-    await harness.flush();
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.digestBanner()).not.toBeNull();
-    const original = harness.nodes.find((node) => node.textContent === "Original stored cue.");
-    expect(original).toBeDefined();
-  });
-
-  test("revisit without loaded session captions keeps the stored lesson without a false digest banner", async () => {
-    const videoId = "digest00003";
-    const captions = validateCaptions([
-      { start_ms: 0, end_ms: 1000, text: "No player captions yet." },
-    ]);
-    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "p", translation: "t" }],
+      lines: [{ ...draft.lines[0]!, pronunciation: "loc", translation: "로컬" }],
     });
     const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({ error: "no_captions" }));
+    storage.set(`ysp:lesson:v2:${videoId}:ko:${sealed.source_digest}`, JSON.stringify(sealed));
+    storage.set(
+      "ysp:local-lessons:v1",
+      JSON.stringify([{ video_id: videoId, study_language: "ko", source_digest: sealed.source_digest, complete: true }]),
+    );
+    const harness = createHarness(script, storage);
     harness.navigate(videoId);
-    await harness.flush();
+    expect(harness.statusPanel()).toBeNull();
     expect(harness.panel()).not.toBeNull();
-    expect(harness.digestBanner()).toBeNull();
+    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Stored local cue.");
   });
 
-  test("regenerate replaces a stored lesson after captions change", async () => {
-    const videoId = "digest00004";
-    const storedCaptions = validateCaptions([
-      { start_ms: 0, end_ms: 1200, text: "Old cue." },
-    ]);
+  test("digest changes on revisit show export without regenerate", async () => {
+    const videoId = "digest00001";
+    const storedCaptions = validateCaptions([{ start_ms: 0, end_ms: 1200, text: "Old cue." }]);
     const draft = buildLessonDraft(
       storedCaptions,
       { provider: "youtube", video_id: videoId, source_language: "en" },
@@ -820,549 +566,32 @@ describe("library userscript runtime smoke", () => {
       ...draft,
       lines: [{ ...draft.lines[0]!, pronunciation: "old", translation: "옛 줄" }],
     });
-    const changedCaptions = validateCaptions([
-      { start_ms: 0, end_ms: 1200, text: "Fresh cue." },
-      { start_ms: 1200, end_ms: 2400, text: "Second fresh cue." },
-    ]);
+    const changedCaptions = validateCaptions([{ start_ms: 0, end_ms: 1200, text: "Fresh cue." }]);
     const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    let fetchCalls = 0;
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US", {
-      fetchImpl: () => {
-        fetchCalls += 1;
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: JSON.stringify({
-                  lines: [
-                    { pronunciation: "new1", translation: "t1" },
-                    { pronunciation: "new2", translation: "t2" },
-                  ],
-                }),
-              },
-            }],
-          }),
-        } as Response);
-      },
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: changedCaptions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    const regenBtn = harness.nodes.find((node) => node.textContent === "Regenerate lesson");
-    expect(regenBtn).toBeDefined();
-    regenBtn!.fire("click");
-    await harness.flush();
-    await harness.flush();
-    await harness.flush();
-    expect(fetchCalls).toBe(1);
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.digestBanner()).toBeNull();
-    expect(harness.panel()!.children[2]!.children).toHaveLength(2);
-    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Fresh cue.");
-    expect(harness.storage.get(LOCAL_LESSON_INDEX_KEY)).toContain(captionDigest(changedCaptions));
-  });
-
-  test("compiled library lessons win over a stored local lesson", async () => {
-    const storage = new Map<string, string>();
-    const localDraft = buildLessonDraft(
-      [{ start_ms: 0, end_ms: 1000, text: "Local only." }],
-      { provider: "youtube", video_id: lesson.video.video_id, source_language: "en" },
-      "ko",
-    );
-    const localSealed = sealLesson({
-      ...localDraft,
-      lines: [{ ...localDraft.lines[0]!, pronunciation: "로컬", translation: "로컬만." }],
-    });
-    storage.set(localLessonStorageKey(lesson.video.video_id, "ko", localSealed.source_digest), JSON.stringify(localSealed));
+    storage.set(`ysp:lesson:v2:${videoId}:ko:${sealed.source_digest}`, JSON.stringify(sealed));
     storage.set(
-      LOCAL_LESSON_INDEX_KEY,
-      JSON.stringify([
-        {
-          video_id: lesson.video.video_id,
-          study_language: "ko",
-          source_digest: localSealed.source_digest,
-          complete: true,
-        },
-      ]),
+      "ysp:local-lessons:v1",
+      JSON.stringify([{ video_id: videoId, study_language: "ko", source_digest: sealed.source_digest, complete: true }]),
     );
-    const harness = createHarness(compileLibraryScript([lesson]), storage);
-    await harness.flush();
-    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
-    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe(
-      lesson.lines[0]!.original,
-    );
-  });
-
-  test("create lesson stores a sealed lesson after mocked model batches", async () => {
-    const videoId = "newvid12345";
-    const captions = validateCaptions([
-      { start_ms: 0, end_ms: 1200, text: "First cue." },
-      { start_ms: 1200, end_ms: 2400, text: "Second cue." },
-    ]);
-    let fetchCalls = 0;
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      fetchImpl: () => {
-        fetchCalls += 1;
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: JSON.stringify({
-                  lines: [
-                    { pronunciation: "p1", translation: "t1" },
-                    { pronunciation: "p2", translation: "t2" },
-                  ],
-                }),
-              },
-            }],
-          }),
-        } as Response);
-      },
-    });
-    expect(harness.windowStub.__yspTestHooks).not.toBeNull();
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
+    const harness = createHarness(script, storage, "en-US", {
+      textTracks: [{
+        mode: "showing",
+        language: "en",
+        cues: changedCaptions.map((caption) => ({
+          startTime: caption.start_ms / 1000,
+          endTime: caption.end_ms / 1000,
+          text: caption.text,
+        })),
+      }],
     });
     harness.navigate(videoId);
-    await harness.flush();
-    expect(harness.createPanel()).not.toBeNull();
-    const createBtn = harness.nodes.find((node) => node.textContent === "Create lesson");
-    expect(createBtn).toBeDefined();
-    createBtn!.fire("click");
-    await harness.flush();
-    await harness.flush();
-    await harness.flush();
-    expect(fetchCalls).toBe(1);
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.panel()!.children[2]!.children).toHaveLength(2);
-    expect(harness.storage.get(LOCAL_LESSON_INDEX_KEY)).toContain(videoId);
-  });
-
-  test("no captions shows a one-line status on the create panel", async () => {
-    const videoId = "nocap123456";
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US");
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({ error: "no_captions" }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    const createBtn = harness.nodes.find((node) => node.textContent === "Create lesson");
-    createBtn!.fire("click");
-    await harness.flush();
-    expect(harness.createStatus()?.textContent).toBe(
-      "No captions on this page — turn on subtitles first.",
-    );
-  });
-
-  test("confirm cancel sends zero model requests", async () => {
-    const videoId = "confirm0001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "One line." }]);
-    let fetchCalls = 0;
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      confirmImpl: () => false,
-      fetchImpl: () => {
-        fetchCalls += 1;
-        return Promise.resolve({ ok: true, json: async () => ({ choices: [] }) } as Response);
-      },
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await harness.flush();
-    expect(fetchCalls).toBe(0);
-  });
-
-  test("a 401 during create leaves compiled library videos working", async () => {
-    const videoId = "authfail001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Need auth." }]);
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      fetchImpl: () =>
-        Promise.resolve({
-          ok: false,
-          status: 401,
-          json: async () => ({}),
-        } as Response),
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "bad-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await harness.flush();
-    await harness.flush();
-    expect(harness.createStatus()?.textContent).toContain("API key");
-    expect(harness.panel()).toBeNull();
-
-    harness.navigate(lesson.video.video_id);
-    await harness.flush();
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
-  });
-
-  test("rejects non-HTTPS endpoints before any model call", async () => {
-    const videoId = "insecure001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Plain HTTP." }]);
-    let fetchCalls = 0;
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      fetchImpl: () => {
-        fetchCalls += 1;
-        return Promise.resolve({ ok: true, json: async () => ({ choices: [] }) } as Response);
-      },
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "http://api.example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await harness.flush();
-    expect(fetchCalls).toBe(0);
-    expect(harness.createStatus()?.textContent).toContain("HTTPS");
-  });
-
-  test("incomplete generate keeps a draft and does not mount the study panel", async () => {
-    const videoId = "partial0001";
-    const captions = validateCaptions([
-      { start_ms: 0, end_ms: 1000, text: "Line one." },
-      { start_ms: 1000, end_ms: 2000, text: "Line two." },
-      { start_ms: 2000, end_ms: 3000, text: "Line three." },
-    ]);
-    let fetchCalls = 0;
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      fetchImpl: () => {
-        fetchCalls += 1;
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: JSON.stringify({
-                  lines: [{ pronunciation: "p1", translation: "t1" }],
-                }),
-              },
-            }],
-          }),
-        } as Response);
-      },
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await harness.flush();
-    await harness.flush();
-    await harness.flush();
-    expect(fetchCalls).toBe(1);
-    expect(harness.panel()).toBeNull();
-    expect(harness.createPanel()).not.toBeNull();
-    expect(harness.createStatus()?.textContent).toContain("incomplete");
-    const index = JSON.parse(harness.storage.get(LOCAL_LESSON_INDEX_KEY)!);
-    expect(index).toHaveLength(1);
-    expect(index[0]!.complete).toBe(false);
-
-    harness.navigate(videoId);
-    await harness.flush();
-    expect(harness.panel()).toBeNull();
-    expect(harness.createPanel()).not.toBeNull();
-  });
-
-  test("check() does not remount the same local lesson on every poll tick", async () => {
-    const videoId = "stable00001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stable line." }]);
-    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "p", translation: "t" }],
-    });
-    const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(videoId);
-    await harness.flush();
-    const panel = harness.panel();
-    expect(panel).not.toBeNull();
-    for (let index = 0; index < 6; index += 1) {
-      harness.tick();
-      await harness.flush();
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      if (harness.panel()?.querySelector('[data-ysp="digest-banner"]')) break;
     }
-    expect(harness.panel()).toBe(panel);
-  });
-
-  test("resolveLocalLesson honors the configured study_language", async () => {
-    const videoId = "study000001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Shared video." }]);
-    const koDraft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
-    const enDraft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "en");
-    const koSealed = sealLesson({
-      ...koDraft,
-      lines: [{ ...koDraft.lines[0]!, pronunciation: "ko-p", translation: "ko-t" }],
-    });
-    const enSealed = sealLesson({
-      ...enDraft,
-      lines: [{ ...enDraft.lines[0]!, pronunciation: "en-p", translation: "en-t" }],
-    });
-    const storage = new Map<string, string>();
-    storage.set(localLessonStorageKey(videoId, "ko", koSealed.source_digest), JSON.stringify(koSealed));
-    storage.set(localLessonStorageKey(videoId, "en", enSealed.source_digest), JSON.stringify(enSealed));
-    storage.set(
-      LOCAL_LESSON_INDEX_KEY,
-      JSON.stringify([
-        { video_id: videoId, study_language: "ko", source_digest: koSealed.source_digest, complete: true },
-        { video_id: videoId, study_language: "en", source_digest: enSealed.source_digest, complete: true },
-      ]),
-    );
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "custom",
-      custom_endpoint: "https://example.test/v1",
-      apiKey: "test-key",
-      model: "test-model",
-      study_language: "ko",
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(videoId);
-    await harness.flush();
-    const resolved = harness.windowStub.__yspTestHooks!.resolveLocalLesson(videoId) as {
-      lesson: { study_language: string; lines: { translation: string }[] };
-    };
-    expect(resolved.lesson.study_language).toBe("ko");
-    expect(resolved.lesson.lines[0]!.translation).toBe("ko-t");
-  });
-
-  test("OpenRouter preset calls the default endpoint without storing the key in localStorage", async () => {
-    const videoId = "openrouter01";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Preset line." }]);
-    let requestedUrl = "";
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      fetchImpl: (url) => {
-        requestedUrl = String(url);
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
-          }),
-        } as Response);
-      },
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    setAuthoringSettings(harness.storage, harness.gmStorage, {
-      provider: "openrouter",
-      apiKey: "user-only-key",
-      study_language: "ko",
-    });
-    harness.navigate(videoId);
-    await harness.flush();
-    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await harness.flush();
-    await harness.flush();
-    expect(requestedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
-    expect(harness.storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("user-only-key");
-    expect(harness.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("user-only-key");
-  });
-
-  test("Safari GM.getValue Promise storage survives a reload without page localStorage", async () => {
-    const videoId = "safarist01";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Safari line." }]);
-    let requestedUrl = "";
-    const storage = new Map<string, string>();
-    const first = createHarness(compileLibraryScript([lesson]), storage, "en-US", {
-      gmApi: "dotted",
-      fetchImpl: (url) => {
-        requestedUrl = String(url);
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
-          }),
-        } as Response);
-      },
-    });
-    first.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    first.navigate(videoId);
-    await first.flush();
-    const keyInput = first.nodes.find((node) => node.type === "password");
-    keyInput!.value = "safari-user-key";
-    first.nodes.find((node) => node.textContent === "Save settings")!.fire("click");
-    await first.flush();
-    expect(storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("safari-user-key");
-    expect(first.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("safari-user-key");
-
-    const second = createHarness(compileLibraryScript([lesson]), storage, "en-US", {
-      gmApi: "dotted",
-      fetchImpl: (url) => {
-        requestedUrl = String(url);
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
-          }),
-        } as Response);
-      },
-    });
-    second.gmStorage.set(AUTHORING_API_KEY_STORAGE_KEY, "safari-user-key");
-    second.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    second.navigate(videoId);
-    await second.flush();
-    await second.flush();
-    second.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await second.flush();
-    await second.flush();
-    expect(requestedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
-    expect(storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("safari-user-key");
-    delete (globalThis as { GM?: unknown }).GM;
-  });
-
-  test("saved settings keep the API key out of lesson JSON and page localStorage", async () => {
-    const videoId = "secret0001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Secret line." }]);
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US", {
-      fetchImpl: () =>
-        Promise.resolve({
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
-          }),
-        } as Response),
-    });
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(videoId);
-    await harness.flush();
-    const keyInput = harness.nodes.find((node) => node.type === "password");
-    expect(keyInput).toBeDefined();
-    keyInput!.value = "super-secret-key";
-    harness.nodes.find((node) => node.textContent === "Save settings")!.fire("click");
-    await harness.flush();
-    expect(harness.storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("super-secret-key");
-    expect(harness.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("super-secret-key");
-    harness.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
-    await harness.flush();
-    await harness.flush();
-    const lessonKey = localLessonStorageKey(videoId, "ko", captionDigest(captions));
-    const storedLesson = harness.storage.get(lessonKey);
-    expect(storedLesson).toBeDefined();
-    expect(storedLesson!).not.toContain("super-secret-key");
-    expect(keyInput!.value).toBe("");
-    expect(keyInput!.placeholder).toContain("-key");
-  });
-
-  test("compiled library videos do not show a create panel", async () => {
-    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US");
-    await harness.flush();
     expect(harness.panel()).not.toBeNull();
-    expect(harness.createPanel()).toBeNull();
-  });
-
-  test("navigating compiled to local shows the local lesson immediately", async () => {
-    const localVideoId = "localvid001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stored local cue." }]);
-    const draft = buildLessonDraft(
-      captions,
-      { provider: "youtube", video_id: localVideoId, source_language: "en" },
-      "ko",
-    );
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "loc", translation: "로컬" }],
-    });
-    const storage = new Map<string, string>();
-    storeSealedLocalLesson(storage, sealed);
-    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
-    await harness.flush();
-    const compiledOriginal = lesson.lines[0]!.original;
-    expect(panelContainsText(harness.panel(), compiledOriginal)).toBe(true);
-
-    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
-      captions: captions.map((caption) => ({ ...caption })),
-      language: "en",
-    }));
-    harness.navigate(localVideoId);
-    expect(panelContainsText(harness.panel(), compiledOriginal)).toBe(false);
-    expect(panelContainsText(harness.panel(), "Stored local cue.")).toBe(true);
-
-    await harness.flush();
-    expect(panelContainsText(harness.panel(), "Stored local cue.")).toBe(true);
+    expect(harness.panel()!.querySelector('[data-ysp="digest-banner"]')).not.toBeNull();
+    expect(harness.nodes.some((node) => node.textContent === "Regenerate lesson")).toBe(false);
+    expect(harness.nodes.some((node) => node.textContent === "Export JSON")).toBe(true);
   });
 });

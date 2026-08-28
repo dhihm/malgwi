@@ -1,13 +1,10 @@
 // ==UserScript==
-// @name         Malgwi Panel
+// @name         Malgwi
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.10
-// @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, vocabulary book, and watch-page lesson creation for new videos.
+// @version      3.11
+// @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
 // @match        https://www.youtube.com/*
-// @inject-into  content
-// @grant        GM_xmlhttpRequest
-// @grant        GM.setValue
-// @grant        GM.getValue
+// @grant        none
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -19,13 +16,15 @@
 var LESSONS = /*__LESSONS_JSON__*/null;
 
 (function () {
-  if (!Array.isArray(LESSONS) || LESSONS.length === 0) return;
+  if (!Array.isArray(LESSONS)) return;
   /* One panel per page: a second installed copy of this script (or an
    * older per-video build left installed) must not double-mount. */
   if (window.__yspPanelActive) return;
   window.__yspPanelActive = true;
-  /*__AUTHORING_MODULE__*/
   var VOCAB_KEY = "ysp:vocab:v1";
+  var LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
+  var LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
+  var LINE_CAP = 200;
   /* Unicode-aware: Latin words, CJK sequences, or short phrases. */
   var WORD_SHAPE = /^[\p{L}\p{N}][\p{L}\p{N}'’-]*(?: [\p{L}\p{N}'’-]+){0,3}$/u;
   var CJK_ONLY = /^[\u1100-\u11FF\u3040-\u30FF\u3130-\u318F\u4E00-\u9FFF\uAC00-\uD7AF]+$/;
@@ -37,81 +36,33 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           empty: "Vocabulary is empty. Drag a word in the original text to add it.",
           dict: "Dictionary", dictTitle: "Open in a web dictionary", del: "Remove from vocabulary",
           jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", add: "+ Vocab: ",
-          create: "Create lesson", creating: "Creating lesson\u2026", settings: "Settings", export: "Export JSON",
-          createHelp: "Turn on YouTube captions, then create a sealed lesson for this video.",
-          providerLabel: "Provider", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
-          provider_custom: "Custom (OpenAI-compatible HTTPS)", apiKeyLabel: "API key",
-          modelLabel: "Model (optional override)", studyLanguageLabel: "Study language (BCP 47)",
-          endpointLabel: "API endpoint (HTTPS)", saveSettings: "Save settings",
-          keySavedPrefix: "Saved key:",
-          noCaptions: "No captions on this page \u2014 turn on subtitles first.",
-          digestChanged: "Captions changed since the stored lesson. Regenerate or export the old one.",
-          regenerate: "Regenerate lesson",
-          needKey: "Choose a provider and paste your API key, then save settings.",
-          insecureEndpoint: "API endpoint must use HTTPS (http://localhost is allowed for local testing).",
-          incomplete: "Lesson is incomplete. Create again to finish the remaining lines.",
-          confirmCall: "Send lines to your model endpoint for this video?",
-          saved: "Lesson saved. Study offline from now on." },
+          notInLibrary: "This video is not in your Malgwi library.",
+          export: "Export JSON",
+          digestChanged: "Captions changed since the stored lesson. Export the old one or re-author with the local CLI." },
     ko: { panel: "말귀", vocab: "단어장", pron: "발음", trans: "번역",
           follow: "따라가기", collapse: "접기", help: "\u25B6 = 구간 점프 \u00B7 원문 드래그 = 단어장 \u00B7 헤더 드래그 = 패널 이동",
           empty: "단어장이 비어 있습니다. 원문에서 단어를 드래그해 추가하세요.",
           dict: "사전", dictTitle: "웹 사전에서 열기", del: "단어장에서 삭제",
           jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", add: "+ 단어장: ",
-          create: "레슨 만들기", creating: "레슨 생성 중\u2026", settings: "설정", export: "JSON 내보내기",
-          createHelp: "YouTube 자막을 켠 뒤 이 영상의 봉인된 레슨을 만드세요.",
-          providerLabel: "제공자", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
-          provider_custom: "사용자 지정(OpenAI 호환 HTTPS)", apiKeyLabel: "API 키",
-          modelLabel: "모델(선택)", studyLanguageLabel: "학습 언어(BCP 47)",
-          endpointLabel: "API 엔드포인트(HTTPS)", saveSettings: "설정 저장",
-          keySavedPrefix: "저장된 키:",
-          noCaptions: "이 페이지에 자막이 없습니다. 먼저 자막을 켜 주세요.",
-          digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 다시 만들거나 기존 레슨을 내보내세요.",
-          regenerate: "레슨 다시 만들기",
-          needKey: "제공자를 고르고 API 키를 붙여넣은 뒤 설정을 저장하세요.",
-          insecureEndpoint: "API 엔드포인트는 HTTPS여야 합니다(로컬 테스트는 http://localhost 허용).",
-          incomplete: "레슨이 완성되지 않았습니다. 다시 만들기로 남은 줄을 채우세요.",
-          confirmCall: "이 영상의 자막 줄을 모델 엔드포인트로 보낼까요?",
-          saved: "레슨이 저장되었습니다. 이제 오프라인으로 학습할 수 있습니다." },
+          notInLibrary: "이 영상은 Malgwi 라이브러리에 없습니다.",
+          export: "JSON 내보내기",
+          digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 내보내거나 로컬 CLI로 다시 작성하세요." },
     zh: { panel: "Malgwi", vocab: "生词本", pron: "发音", trans: "翻译",
           follow: "跟随", collapse: "收起", help: "\u25B6 = 跳转 \u00B7 划选单词 = 生词本 \u00B7 拖动标题 = 移动面板",
           empty: "生词本是空的。在原文中划选单词即可添加。",
           dict: "词典", dictTitle: "在网络词典中打开", del: "从生词本删除",
           jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", add: "+ 生词: ",
-          create: "创建课程", creating: "正在创建课程\u2026", settings: "设置", export: "导出 JSON",
-          createHelp: "打开 YouTube 字幕后，为本视频创建密封课程。",
-          providerLabel: "提供商", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
-          provider_custom: "自定义(OpenAI 兼容 HTTPS)", apiKeyLabel: "API 密钥",
-          modelLabel: "模型(可选)", studyLanguageLabel: "学习语言(BCP 47)",
-          endpointLabel: "API 端点(HTTPS)", saveSettings: "保存设置",
-          keySavedPrefix: "已保存密钥:",
-          noCaptions: "此页面没有字幕，请先打开字幕。",
-          digestChanged: "字幕已变更，与已存课程不一致。请重新生成或导出旧课程。",
-          regenerate: "重新生成课程",
-          needKey: "请选择提供商并粘贴 API 密钥，然后保存设置。",
-          insecureEndpoint: "API 端点须为 HTTPS（本地测试允许 http://localhost）。",
-          incomplete: "课程未完成。请再次创建以补全剩余行。",
-          confirmCall: "将此视频的字幕行发送到您的模型端点？",
-          saved: "课程已保存，之后可离线学习。" },
+          notInLibrary: "此视频不在 Malgwi 库中。",
+          export: "导出 JSON",
+          digestChanged: "字幕已变更。请导出旧课程，或用本地 CLI 重新编写。" },
     ja: { panel: "Malgwi", vocab: "単語帳", pron: "発音", trans: "翻訳",
           follow: "追従", collapse: "閉じる", help: "\u25B6 = ジャンプ \u00B7 単語ドラッグ = 単語帳 \u00B7 ヘッダードラッグ = 移動",
           empty: "単語帳は空です。原文の単語をドラッグして追加してください。",
           dict: "辞書", dictTitle: "ウェブ辞書で開く", del: "単語帳から削除",
           jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", add: "+ 単語帳: ",
-          create: "レッスン作成", creating: "レッスン作成中\u2026", settings: "設定", export: "JSON エクスポート",
-          createHelp: "YouTube の字幕をオンにしてから、この動画の密封レッスンを作成してください。",
-          providerLabel: "プロバイダ", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
-          provider_custom: "カスタム(OpenAI 互換 HTTPS)", apiKeyLabel: "API キー",
-          modelLabel: "モデル(任意)", studyLanguageLabel: "学習言語(BCP 47)",
-          endpointLabel: "API エンドポイント(HTTPS)", saveSettings: "設定を保存",
-          keySavedPrefix: "保存済みキー:",
-          noCaptions: "このページに字幕がありません。先に字幕をオンにしてください。",
-          digestChanged: "保存済みレッスン以降に字幕が変わりました。再生成するか古いレッスンをエクスポートしてください。",
-          regenerate: "レッスンを再生成",
-          needKey: "プロバイダを選び API キーを貼り付け、設定を保存してください。",
-          insecureEndpoint: "API エンドポイントは HTTPS である必要があります（ローカルテストは http://localhost 可）。",
-          incomplete: "レッスンが未完成です。もう一度作成して残りの行を埋めてください。",
-          confirmCall: "この動画の字幕行をモデルエンドポイントに送信しますか？",
-          saved: "レッスンを保存しました。以降はオフラインで学習できます。" }
+          notInLibrary: "この動画は Malgwi ライブラリにありません。",
+          export: "JSON エクスポート",
+          digestChanged: "保存済みレッスン以降に字幕が変わりました。エクスポートするか、ローカル CLI で再作成してください。" }
   };
 
   /* Panel chrome follows the user's system locale; lesson content
@@ -138,17 +89,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   }
   var lesson = null;
   var panel = null;
-  var createPanel = null;
-  var createStatusEl = null;
-  var createBusy = false;
-  var createVideoId = null;
-  var settingsProviderEl = null;
-  var settingsKeyEl = null;
-  var settingsModelEl = null;
-  var settingsStudyEl = null;
-  var settingsEndpointEl = null;
-  var settingsEndpointWrap = null;
-  var digestChangedActive = false;
+  var statusPanel = null;
   var listEl = null;
   var rows = [];
   var activeIndex = -1;
@@ -169,10 +110,145 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   var resizing = null;
   var panelWidth = null;
   var panelHeight = null;
+  var digestChangedActive = false;
   var mountedLessonKey = "";
 
+  function canonicalJson(value) {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+    var entries = Object.keys(value)
+      .filter(function (key) { return value[key] !== undefined; })
+      .sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; })
+      .map(function (key) { return JSON.stringify(key) + ":" + canonicalJson(value[key]); });
+    return "{" + entries.join(",") + "}";
+  }
+
+  function sha256Hex(text) {
+    if (!window.crypto || !window.crypto.subtle) return Promise.reject(new Error("crypto unavailable"));
+    return window.crypto.subtle
+      .digest("SHA-256", new TextEncoder().encode(text))
+      .then(function (buffer) {
+        return Array.from(new Uint8Array(buffer))
+          .map(function (byte) { return byte.toString(16).padStart(2, "0"); })
+          .join("");
+      });
+  }
+
+  function captionDigest(captions) {
+    return sha256Hex(canonicalJson(captions));
+  }
+
+  function localLessonStorageKey(videoId, studyLanguage, sourceDigest) {
+    return LOCAL_LESSON_PREFIX + videoId + ":" + studyLanguage + ":" + sourceDigest;
+  }
+
+  function loadLocalIndex() {
+    try {
+      var parsed = JSON.parse(window.localStorage.getItem(LOCAL_LESSON_INDEX_KEY) || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function loadStoredLesson(key) {
+    try {
+      var raw = window.localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function isLessonComplete(candidate) {
+    return !!(
+      candidate &&
+      Array.isArray(candidate.lines) &&
+      candidate.lines.length > 0 &&
+      candidate.lines.every(function (line) {
+        return line.pronunciation && line.translation;
+      })
+    );
+  }
+
+  function resolveLocalLesson(videoId) {
+    var index = loadLocalIndex();
+    for (var i = 0; i < index.length; i += 1) {
+      var entry = index[i];
+      if (entry.video_id !== videoId) continue;
+      var key = localLessonStorageKey(entry.video_id, entry.study_language, entry.source_digest);
+      var stored = loadStoredLesson(key);
+      if (stored && isLessonComplete(stored)) return { entry: entry, lesson: stored, key: key };
+    }
+    return null;
+  }
+
+  function exportLessonJson(targetLesson) {
+    var blob = new Blob([JSON.stringify(targetLesson, null, 2) + "\n"], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = targetLesson.video.video_id + "-lesson-v2.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function stripCueText(html) {
+    var div = document.createElement("div");
+    div.textContent = String(html || "").replace(/<[^>]+>/g, " ");
+    return div.textContent.replace(/\s+/g, " ").trim();
+  }
+
+  function readSessionCaptions() {
+    var video = document.querySelector("#movie_player video") || document.querySelector("video");
+    if (!video) return { error: "no_video" };
+    var track = null;
+    var tracks = video.textTracks;
+    if (!tracks) return { error: "no_captions" };
+    for (var i = 0; i < tracks.length; i += 1) {
+      if (tracks[i].mode === "showing" || tracks[i].mode === "hidden") track = tracks[i];
+    }
+    if (!track) {
+      for (var j = 0; j < tracks.length; j += 1) {
+        if (tracks[j].cues && tracks[j].cues.length > 0) {
+          track = tracks[j];
+          break;
+        }
+      }
+    }
+    if (!track || !track.cues || track.cues.length === 0) return { error: "no_captions" };
+    var captions = [];
+    var previousStart = -1;
+    for (var k = 0; k < track.cues.length; k += 1) {
+      var cue = track.cues[k];
+      var text = stripCueText(cue.text);
+      if (!text) continue;
+      var startMs = Math.round(cue.startTime * 1000);
+      var endMs = Math.round(cue.endTime * 1000);
+      if (endMs <= startMs) continue;
+      if (startMs < previousStart) continue;
+      previousStart = startMs;
+      captions.push({ start_ms: startMs, end_ms: endMs, text: text });
+    }
+    if (captions.length === 0) return { error: "no_captions" };
+    if (captions.length > LINE_CAP) captions = captions.slice(0, LINE_CAP);
+    return { captions: captions, language: track.language || "" };
+  }
+
+  function sessionDigestDiffers(storedDigest, callback) {
+    var capture = readSessionCaptions();
+    if (capture.error || !capture.captions || capture.captions.length === 0) {
+      callback(null);
+      return;
+    }
+    captionDigest(capture.captions).then(function (currentDigest) {
+      callback(currentDigest !== storedDigest);
+    }).catch(function () {
+      callback(null);
+    });
+  }
+
   function lessonMountKey(someLesson) {
-    if (!someLesson || !someLesson.video) return "";
     return someLesson.video.video_id + "\0" + (someLesson.study_language || "") + "\0" + (someLesson.source_digest || "");
   }
 
@@ -243,7 +319,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     return new URLSearchParams(window.location.search).get("v");
   }
 
-  function lessonForCompiled(videoId) {
+  function lessonFor(videoId) {
     for (var i = 0; i < LESSONS.length; i += 1) {
       var candidate = LESSONS[i];
       if (candidate && candidate.video && candidate.video.video_id === videoId &&
@@ -254,11 +330,11 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     return null;
   }
 
-  function lessonFor(videoId) {
-    var compiled = lessonForCompiled(videoId);
+  function activeLessonFor(videoId) {
+    var compiled = lessonFor(videoId);
     if (compiled) return compiled;
     var local = resolveLocalLesson(videoId);
-    if (local && isLessonComplete(local.lesson)) return local.lesson;
+    if (local) return local.lesson;
     return null;
   }
 
@@ -825,27 +901,18 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     if (digestChangedActive) {
       var banner = document.createElement("div");
       banner.setAttribute("data-ysp", "digest-banner");
-      banner.style.cssText =
-        "font-size:12px;color:" + colors.pron + ";padding:8px 12px;border-bottom:1px solid " + colors.border + ";";
+      banner.style.cssText = "padding:8px 12px;border-bottom:1px solid " + colors.border + ";background:" + colors.chip + ";";
       var bannerText = document.createElement("div");
       bannerText.textContent = text.digestChanged;
+      bannerText.style.cssText = "font-size:12px;color:" + colors.pron + ";margin-bottom:8px;";
       banner.appendChild(bannerText);
       var bannerRow = document.createElement("div");
-      bannerRow.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;";
-      var regenBtn = document.createElement("button");
-      regenBtn.textContent = text.regenerate;
-      regenBtn.style.cssText =
-        "font-size:12px;padding:4px 10px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-        "background:" + colors.fg + ";color:" + colors.bg + ";";
-      regenBtn.addEventListener("click", function () {
-        if (lesson && lesson.video) regenerateLesson(lesson.video.video_id);
-      });
-      bannerRow.appendChild(regenBtn);
+      bannerRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
       var exportBtn = document.createElement("button");
       exportBtn.textContent = text.export;
       exportBtn.style.cssText =
         "font-size:12px;padding:4px 10px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-        "background:" + colors.chip + ";color:" + colors.fg + ";";
+        "background:" + colors.bg + ";color:" + colors.fg + ";";
       exportBtn.addEventListener("click", function () {
         if (lesson) exportLessonJson(lesson);
       });
@@ -940,6 +1007,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     var nextDigestChanged = !!options.digestChanged;
     var nextKey = lessonMountKey(next);
     if (panel && mountedLessonKey === nextKey && digestChangedActive === nextDigestChanged) return;
+    unmountStatus();
     unmount();
     lesson = next;
     mountedLessonKey = nextKey;
@@ -975,314 +1043,25 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     mountedLessonKey = "";
   }
 
-  function unmountCreate() {
-    if (createPanel) {
-      createPanel.remove();
-      createPanel = null;
-      createStatusEl = null;
-    }
-    settingsProviderEl = null;
-    settingsKeyEl = null;
-    settingsModelEl = null;
-    settingsStudyEl = null;
-    settingsEndpointEl = null;
-    settingsEndpointWrap = null;
-    createVideoId = null;
-    createBusy = false;
-  }
-
-  function settingsInputStyle(colors) {
-    return "font-size:12px;padding:6px 8px;border-radius:6px;border:1px solid " + colors.border +
-      ";background:" + colors.bg + ";color:" + colors.fg + ";width:100%;box-sizing:border-box;";
-  }
-
-  function settingsFieldWrap(label, input, colors) {
-    var wrap = document.createElement("div");
-    wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
-    var lab = document.createElement("label");
-    lab.textContent = label;
-    lab.style.cssText = "font-size:11px;color:" + colors.muted + ";";
-    input.style.cssText = settingsInputStyle(colors);
-    wrap.appendChild(lab);
-    wrap.appendChild(input);
-    return wrap;
-  }
-
-  function readSettingsFromForm() {
-    var provider = settingsProviderEl ? normalizeProvider(settingsProviderEl.value) : "openrouter";
-    var publicSettings = {
-      provider: provider,
-      study_language: settingsStudyEl && settingsStudyEl.value ? settingsStudyEl.value.trim() : "ko",
-    };
-    if (settingsModelEl && settingsModelEl.value.trim()) publicSettings.model = settingsModelEl.value.trim();
-    if (provider === "custom" && settingsEndpointEl && settingsEndpointEl.value.trim()) {
-      publicSettings.custom_endpoint = settingsEndpointEl.value.trim();
-    }
-    var apiKey = settingsKeyEl && settingsKeyEl.value.trim() ? settingsKeyEl.value.trim() : loadApiKey();
-    return { publicSettings: publicSettings, apiKey: apiKey };
-  }
-
-  function syncProviderFields() {
-    if (!settingsProviderEl) return;
-    var text = uiStrings();
-    var provider = normalizeProvider(settingsProviderEl.value);
-    if (settingsEndpointWrap) {
-      settingsEndpointWrap.style.display = provider === "custom" ? "flex" : "none";
-    }
-    if (settingsModelEl && !settingsModelEl.value.trim()) {
-      settingsModelEl.placeholder = resolveProviderModel(provider, "");
-    }
-    var savedKey = loadApiKey();
-    if (settingsKeyEl) {
-      settingsKeyEl.placeholder = savedKey ? text.keySavedPrefix + " " + maskApiKey(savedKey) : text.apiKeyLabel;
-    }
-  }
-
-  function populateSettingsForm() {
-    if (!settingsProviderEl) return;
-    var publicSettings = loadAuthoringSettingsPublic();
-    var provider = normalizeProvider(publicSettings.provider);
-    settingsProviderEl.value = provider;
-    if (settingsModelEl) {
-      settingsModelEl.value = publicSettings.model || "";
-      settingsModelEl.placeholder = resolveProviderModel(provider, "");
-    }
-    if (settingsStudyEl) settingsStudyEl.value = publicSettings.study_language || "ko";
-    if (settingsEndpointEl) settingsEndpointEl.value = publicSettings.custom_endpoint || "";
-    if (settingsKeyEl) settingsKeyEl.value = "";
-    syncProviderFields();
-  }
-
-  function saveSettingsFromForm() {
-    var form = readSettingsFromForm();
-    saveAuthoringSettings(form.publicSettings, form.apiKey);
-    if (settingsKeyEl) settingsKeyEl.value = "";
-    syncProviderFields();
-    setCreateStatus("");
-  }
-
-  function buildSettingsSection(colors, text) {
-    var section = document.createElement("div");
-    section.setAttribute("data-ysp", "settings");
-    section.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid " +
-      colors.border + ";border-radius:8px;background:" + colors.chip + ";";
-
-    var heading = document.createElement("div");
-    heading.textContent = text.settings;
-    heading.style.cssText = "font-size:12px;font-weight:700;";
-    section.appendChild(heading);
-
-    settingsProviderEl = document.createElement("select");
-    ["openrouter", "openai", "custom"].forEach(function (value) {
-      var option = document.createElement("option");
-      option.value = value;
-      option.textContent = text["provider_" + value];
-      settingsProviderEl.appendChild(option);
-    });
-    settingsProviderEl.addEventListener("change", syncProviderFields);
-    section.appendChild(settingsFieldWrap(text.providerLabel, settingsProviderEl, colors));
-
-    settingsKeyEl = document.createElement("input");
-    settingsKeyEl.type = "password";
-    settingsKeyEl.autocomplete = "off";
-    section.appendChild(settingsFieldWrap(text.apiKeyLabel, settingsKeyEl, colors));
-
-    settingsModelEl = document.createElement("input");
-    settingsModelEl.type = "text";
-    settingsModelEl.autocomplete = "off";
-    section.appendChild(settingsFieldWrap(text.modelLabel, settingsModelEl, colors));
-
-    settingsStudyEl = document.createElement("input");
-    settingsStudyEl.type = "text";
-    settingsStudyEl.autocomplete = "off";
-    section.appendChild(settingsFieldWrap(text.studyLanguageLabel, settingsStudyEl, colors));
-
-    settingsEndpointEl = document.createElement("input");
-    settingsEndpointEl.type = "url";
-    settingsEndpointEl.autocomplete = "off";
-    settingsEndpointWrap = settingsFieldWrap(text.endpointLabel, settingsEndpointEl, colors);
-    section.appendChild(settingsEndpointWrap);
-
-    var saveBtn = document.createElement("button");
-    saveBtn.textContent = text.saveSettings;
-    saveBtn.style.cssText =
-      "font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-      "background:" + colors.fg + ";color:" + colors.bg + ";align-self:flex-start;";
-    saveBtn.addEventListener("click", saveSettingsFromForm);
-    section.appendChild(saveBtn);
-
-    populateSettingsForm();
-    hydrateApiKey(function () { populateSettingsForm(); });
-    return section;
-  }
-
-  function setCreateStatus(message) {
-    if (createStatusEl) createStatusEl.textContent = message || "";
-  }
-
-  function pageTitle() {
-    var heading = document.querySelector("h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string");
-    return heading && heading.textContent ? heading.textContent.trim() : "";
-  }
-
-  function sessionDigestDiffers(storedDigest, callback) {
-    var capture = readSessionCaptionsImpl();
-    if (capture.error || !capture.captions || capture.captions.length === 0) {
-      callback(null);
-      return;
-    }
-    captionDigest(capture.captions).then(function (currentDigest) {
-      callback(currentDigest !== storedDigest);
-    }).catch(function () {
-      callback(null);
-    });
-  }
-
-  function regenerateLesson(videoId) {
+  function mountStatus() {
+    if (statusPanel) return;
     unmount();
-    mountCreate(videoId);
-    startCreateLesson(videoId, { forceRegenerate: true });
-  }
-
-  function startCreateLesson(videoId, options) {
-    hydrateApiKey(function () { startCreateLessonReady(videoId, options); });
-  }
-
-  function startCreateLessonReady(videoId, options) {
-    options = options || {};
-    if (createBusy) return;
-    if (lessonForCompiled(videoId)) return;
-    saveSettingsFromForm();
-    var text = uiStrings();
-    var settings = loadAuthoringSettings();
-    if (!settings) {
-      setCreateStatus(text.needKey);
-      return;
-    }
-    var endpoint = String(settings.endpoint || "").replace(/\/+$/u, "");
-    if (!isAuthoringEndpointAllowed(endpoint)) {
-      setCreateStatus(text.insecureEndpoint);
-      return;
-    }
-    var capture = readSessionCaptionsImpl();
-    if (capture.error) {
-      setCreateStatus(text.noCaptions);
-      return;
-    }
-    if (!confirmedForVideo(videoId) && !window.confirm(text.confirmCall)) return;
-    markConfirmed(videoId);
-    createBusy = true;
-    setCreateStatus(text.creating);
-    var studyLanguage = settings.study_language || "ko";
-    var sourceLanguage = capture.language || "en";
-    buildLessonDraft(capture.captions, videoId, studyLanguage, sourceLanguage.split("-")[0], pageTitle())
-      .then(function (draft) {
-        storeLocalLesson(draft, false);
-        return runAuthoringBatches(draft, settings, function (phase, current, total) {
-          setCreateStatus(text.creating + " (" + current + "/" + total + ")");
-        });
-      })
-      .then(function (finished) {
-        createBusy = false;
-        if (!finished) return;
-        if (isLessonComplete(finished)) {
-          storeLocalLesson(finished, true);
-          setCreateStatus(text.saved);
-          unmountCreate();
-          mount(finished);
-        } else {
-          storeLocalLesson(finished, false);
-          setCreateStatus(text.incomplete);
-        }
-      })
-      .catch(function (error) {
-        createBusy = false;
-        if (error && error.message === "missing_settings") setCreateStatus(text.needKey);
-        else if (error && error.message === "insecure_endpoint") setCreateStatus(text.insecureEndpoint);
-        else if (error && error.status === 401) setCreateStatus(text.needKey);
-        else setCreateStatus(String(error && error.message ? error.message : error));
-      });
-  }
-
-  function buildCreatePanel(videoId, local, digestChanged) {
     var colors = palette();
     var text = uiStrings();
-    createPanel = document.createElement("div");
-    createPanel.id = "ysp-create-panel";
-    createPanel.style.cssText =
-      "position:fixed;top:60px;right:0;bottom:0;width:400px;max-width:90vw;z-index:6000;" +
-      "display:flex;flex-direction:column;background:" + colors.bg + ";color:" + colors.fg + ";" +
-      "border-left:1px solid " + colors.border + ";font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;" +
-      "box-shadow:-4px 0 16px rgba(0,0,0,0.15);overflow:hidden;padding:12px;gap:10px;";
-
-    var title = document.createElement("div");
-    title.textContent = text.panel;
-    title.style.cssText = "font-weight:700;font-size:14px;";
-    createPanel.appendChild(title);
-
-    var help = document.createElement("div");
-    help.textContent = text.createHelp;
-    help.style.cssText = "font-size:12px;color:" + colors.muted + ";";
-    createPanel.appendChild(help);
-
-    if (digestChanged) {
-      var digestNote = document.createElement("div");
-      digestNote.setAttribute("data-ysp", "digest-note");
-      digestNote.textContent = text.digestChanged;
-      digestNote.style.cssText = "font-size:12px;color:" + colors.pron + ";";
-      createPanel.appendChild(digestNote);
-    }
-
-    createStatusEl = document.createElement("div");
-    createStatusEl.id = "ysp-create-status";
-    createStatusEl.style.cssText = "font-size:12px;color:" + colors.trans + ";min-height:1.2em;";
-    createPanel.appendChild(createStatusEl);
-
-    createPanel.appendChild(buildSettingsSection(colors, text));
-
-    var row = document.createElement("div");
-    row.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;";
-    var createBtn = document.createElement("button");
-    createBtn.textContent = text.create;
-    createBtn.style.cssText =
-      "font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-      "background:" + colors.fg + ";color:" + colors.bg + ";";
-    createBtn.addEventListener("click", function () { startCreateLesson(videoId); });
-    row.appendChild(createBtn);
-
-    if (local && local.lesson && isLessonComplete(local.lesson)) {
-      var exportBtn = document.createElement("button");
-      exportBtn.textContent = text.export;
-      exportBtn.style.cssText =
-        "font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-        "background:" + colors.chip + ";color:" + colors.fg + ";";
-      exportBtn.addEventListener("click", function () { exportLessonJson(local.lesson); });
-      row.appendChild(exportBtn);
-    }
-    createPanel.appendChild(row);
-    document.body.appendChild(createPanel);
+    statusPanel = document.createElement("div");
+    statusPanel.id = "ysp-status-panel";
+    statusPanel.style.cssText =
+      "position:fixed;top:60px;right:12px;z-index:6000;max-width:320px;padding:10px 12px;" +
+      "background:" + colors.bg + ";color:" + colors.muted + ";border:1px solid " + colors.border + ";" +
+      "border-radius:8px;font-size:12px;box-shadow:-2px 2px 12px rgba(0,0,0,0.12);";
+    statusPanel.textContent = text.notInLibrary;
+    document.body.appendChild(statusPanel);
   }
 
-  function mountCreate(videoId) {
-    if (createPanel && createVideoId === videoId) return;
-    unmountCreate();
-    createVideoId = videoId;
-    var local = resolveLocalLesson(videoId);
-    buildCreatePanel(videoId, local, false);
-    if (local && local.lesson && isLessonComplete(local.lesson)) {
-      sessionDigestDiffers(local.lesson.source_digest, function (changed) {
-        if (createVideoId !== videoId || !createPanel) return;
-        if (changed !== true) return;
-        var note = createPanel.querySelector('[data-ysp="digest-note"]');
-        if (note) return;
-        var colors = palette();
-        var text = uiStrings();
-        note = document.createElement("div");
-        note.setAttribute("data-ysp", "digest-note");
-        note.textContent = text.digestChanged;
-        note.style.cssText = "font-size:12px;color:" + colors.pron + ";";
-        createPanel.insertBefore(note, createStatusEl);
-      });
+  function unmountStatus() {
+    if (statusPanel) {
+      statusPanel.remove();
+      statusPanel = null;
     }
   }
 
@@ -1290,35 +1069,30 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     var videoId = currentVideoId();
     if (!videoId) {
       unmount();
-      unmountCreate();
+      unmountStatus();
       return;
     }
-    if (lessonForCompiled(videoId)) {
-      unmountCreate();
-      mount(lessonForCompiled(videoId));
+    var compiled = lessonFor(videoId);
+    if (compiled) {
+      unmountStatus();
+      mount(compiled);
       return;
     }
     var local = resolveLocalLesson(videoId);
-    if (local && isLessonComplete(local.lesson)) {
-      unmountCreate();
+    if (local) {
+      unmountStatus();
       var mountedVideoId = lesson && lesson.video ? lesson.video.video_id : null;
-      if (mountedVideoId !== videoId) {
-        unmount();
-      }
-      if (!panel || mountedVideoId !== videoId) {
-        mount(local.lesson, { digestChanged: false });
-      }
+      if (mountedVideoId !== videoId) unmount();
+      if (!panel || mountedVideoId !== videoId) mount(local.lesson, { digestChanged: false });
       sessionDigestDiffers(local.lesson.source_digest, function (changed) {
         if (currentVideoId() !== videoId) return;
         var wantBanner = changed === true;
-        if (digestChangedActive !== wantBanner) {
-          mount(local.lesson, { digestChanged: wantBanner });
-        }
+        if (digestChangedActive !== wantBanner) mount(local.lesson, { digestChanged: wantBanner });
       });
       return;
     }
     unmount();
-    mountCreate(videoId);
+    mountStatus();
   }
 
   /* YouTube is a SPA: react to its navigation event, with a slow fallback. */

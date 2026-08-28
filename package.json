@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bun test",
     "build": "bun compiler/build.ts",
+    "author": "bun compiler/author.ts",
     "pin": "bun scripts/pin.ts"
   },
   "devDependencies": {
