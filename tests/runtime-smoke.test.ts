@@ -116,6 +116,7 @@ function createHarness(script: string, sharedStorage?: Map<string, string>, uiLa
   const storage = sharedStorage ?? new Map<string, string>();
   const opened: string[] = [];
   const intervals: (() => void)[] = [];
+  const location = { pathname: "/watch", search: `?v=${lessonFixture.video.video_id}`, protocol: "https:" };
   let selectionText = "";
   let selectionAnchor: StubNode | null = null;
 
@@ -133,7 +134,7 @@ function createHarness(script: string, sharedStorage?: Map<string, string>, uiLa
   };
 
   const windowStub = {
-    location: { pathname: "/watch", search: `?v=${lessonFixture.video.video_id}`, protocol: "https:" },
+    location, 
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => void storage.set(key, value),
@@ -178,7 +179,14 @@ function createHarness(script: string, sharedStorage?: Map<string, string>, uiLa
     docFire(type: string, event: unknown = {}) {
       for (const handler of documentListeners[type] ?? []) handler(event);
     },
-    panel: () => nodes.find((node) => node.id === "ysp-panel") ?? null,
+    navigate(videoId: string | null) {
+      location.pathname = videoId === null ? "/" : "/watch";
+      location.search = videoId === null ? "" : `?v=${videoId}`;
+      // The 2s polling fallback drives check() in the harness.
+      for (const handler of intervals) handler();
+    },
+    panel: () =>
+      nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null,
   };
 }
 
@@ -212,6 +220,33 @@ describe("library userscript runtime smoke", () => {
     jump.fire("click");
     expect(harness.video.currentTime).toBeCloseTo(lesson.lines[2]!.start_ms / 1000);
     expect(harness.video.played).toBe(true);
+  });
+
+  test("navigating between videos remounts the right lesson", () => {
+    const other = validateLesson({
+      ...lessonFixture,
+      video: { ...lessonFixture.video, video_id: "zzz999AAA_-", title: "Second video" },
+      lines: [
+        { start_ms: 0, end_ms: 1500, original: "Hello again.", pronunciation: "헬로 어겐.", translation: "다시 안녕." },
+      ],
+    });
+    const harness = createHarness(compileLibrary(template, [lesson, other]));
+
+    // Mounted for the first video with its line count.
+    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
+
+    // SPA-navigate to the second studied video: panel rebuilds for it.
+    harness.navigate("zzz999AAA_-");
+    expect(harness.panel()!.children[2]!.children).toHaveLength(1);
+    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Hello again.");
+
+    // Navigate to a video that is not in the library: panel unmounts.
+    harness.navigate("unstudied123".slice(0, 11));
+    expect(harness.panel()).toBeNull();
+
+    // And back to the first video: panel returns.
+    harness.navigate(lesson.video.video_id);
+    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
   });
 
   test("the repeat button cycles once, loop, off", () => {
