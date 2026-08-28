@@ -8,10 +8,18 @@ import {
   buildLessonDraft,
   isLessonComplete,
   isAuthoringEndpointAllowed,
+  lessonContainsSecret,
   localLessonStorageKey,
+  maskApiKey,
   mergeModelBatch,
+  normalizeProvider,
   parseModelBatchResponse,
   prepareAuthoringModule,
+  PROVIDER_PRESETS,
+  publicSettingsForStorage,
+  resolveAuthoringSettings,
+  resolveProviderEndpoint,
+  resolveProviderModel,
   sealLesson,
   upsertLocalLessonIndex,
 } from "../src/authoring.ts";
@@ -44,8 +52,10 @@ describe("caption digest parity", () => {
   test("prepareAuthoringModule injects the shared canonicalJson implementation", () => {
     const prepared = prepareAuthoringModule(authoringTemplate, { testHooks: true });
     expect(prepared).toContain("return a < b ? -1 : a > b ? 1 : 0");
+    expect(prepared).toContain("openrouter.ai/api/v1");
     expect(prepared).not.toContain("/*__CANONICAL_JSON__*/");
     expect(prepared).not.toContain("/*__AUTHORING_CORE__*/");
+    expect(prepared).not.toContain("/*__PROVIDER_PRESETS__*/");
     expect(prepared).toContain("__yspTestHooks");
   });
 
@@ -53,6 +63,70 @@ describe("caption digest parity", () => {
     const prepared = prepareAuthoringModule(authoringTemplate);
     expect(prepared).not.toContain("__yspTestHooks");
     expect(prepared).not.toContain("/*__TEST_HOOKS__*/");
+  });
+});
+
+describe("provider presets", () => {
+  test("OpenRouter fills the default endpoint and cheap chat model", () => {
+    expect(resolveProviderEndpoint("openrouter")).toBe(PROVIDER_PRESETS.openrouter.endpoint);
+    expect(resolveProviderModel("openrouter")).toBe(PROVIDER_PRESETS.openrouter.defaultModel);
+  });
+
+  test("OpenAI fills the default endpoint and model", () => {
+    expect(resolveProviderEndpoint("openai")).toBe(PROVIDER_PRESETS.openai.endpoint);
+    expect(resolveProviderModel("openai")).toBe(PROVIDER_PRESETS.openai.defaultModel);
+  });
+
+  test("custom provider uses the user endpoint and optional model override", () => {
+    expect(resolveProviderEndpoint("custom", "https://proxy.example.test/v1")).toBe("https://proxy.example.test/v1");
+    expect(resolveProviderModel("custom", "my-model")).toBe("my-model");
+    expect(resolveProviderModel("custom")).toBe("gpt-4o-mini");
+  });
+
+  test("resolveAuthoringSettings requires both endpoint and key", () => {
+    expect(
+      resolveAuthoringSettings({ provider: "openrouter", study_language: "ko" }, "secret-key"),
+    ).toMatchObject({
+      provider: "openrouter",
+      endpoint: PROVIDER_PRESETS.openrouter.endpoint,
+      apiKey: "secret-key",
+      study_language: "ko",
+    });
+    expect(resolveAuthoringSettings({ provider: "openrouter" }, "")).toBeNull();
+    expect(
+      resolveAuthoringSettings({ provider: "custom", custom_endpoint: "http://evil.test/v1" }, "secret-key"),
+    ).toMatchObject({ endpoint: "http://evil.test/v1" });
+  });
+
+  test("public settings storage never includes the API key", () => {
+    const stored = publicSettingsForStorage({
+      provider: "openrouter",
+      study_language: "ko",
+      model: "openai/gpt-4o-mini",
+    });
+    expect(stored).toEqual({
+      provider: "openrouter",
+      study_language: "ko",
+      model: "openai/gpt-4o-mini",
+    });
+    expect(JSON.stringify(stored)).not.toContain("secret");
+  });
+
+  test("maskApiKey shows only the last four characters", () => {
+    expect(maskApiKey("sk-live-abcdef1234")).toBe("\u2022\u2022\u2022\u20221234");
+    expect(maskApiKey("abc")).toBe("");
+  });
+
+  test("lesson JSON must not embed the API key", () => {
+    const draft = buildLessonDraft(validateCaptions(captionsFixture), lessonFixture.video, "ko");
+    const secret = "super-secret-key";
+    expect(lessonContainsSecret(draft, secret)).toBe(false);
+    expect(lessonContainsSecret({ ...draft, apiKey: secret }, secret)).toBe(true);
+  });
+
+  test("unknown provider values fall back to OpenRouter", () => {
+    expect(normalizeProvider(undefined)).toBe("openrouter");
+    expect(normalizeProvider("weird")).toBe("openrouter");
   });
 });
 

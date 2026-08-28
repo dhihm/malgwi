@@ -1,11 +1,13 @@
 // ==UserScript==
-// @name         Malgwi
+// @name         Malgwi Panel
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.9
+// @version      3.10
 // @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, vocabulary book, and watch-page lesson creation for new videos.
 // @match        https://www.youtube.com/*
+// @inject-into  content
 // @grant        GM_xmlhttpRequest
-// @connect      *
+// @grant        GM.setValue
+// @grant        GM.getValue
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -37,10 +39,15 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", add: "+ Vocab: ",
           create: "Create lesson", creating: "Creating lesson\u2026", settings: "Settings", export: "Export JSON",
           createHelp: "Turn on YouTube captions, then create a sealed lesson for this video.",
+          providerLabel: "Provider", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
+          provider_custom: "Custom (OpenAI-compatible HTTPS)", apiKeyLabel: "API key",
+          modelLabel: "Model (optional override)", studyLanguageLabel: "Study language (BCP 47)",
+          endpointLabel: "API endpoint (HTTPS)", saveSettings: "Save settings",
+          keySavedPrefix: "Saved key:",
           noCaptions: "No captions on this page \u2014 turn on subtitles first.",
           digestChanged: "Captions changed since the stored lesson. Regenerate or export the old one.",
           regenerate: "Regenerate lesson",
-          needKey: "Set an API endpoint and key in Settings first.",
+          needKey: "Choose a provider and paste your API key, then save settings.",
           insecureEndpoint: "API endpoint must use HTTPS (http://localhost is allowed for local testing).",
           incomplete: "Lesson is incomplete. Create again to finish the remaining lines.",
           confirmCall: "Send lines to your model endpoint for this video?",
@@ -52,10 +59,15 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", add: "+ 단어장: ",
           create: "레슨 만들기", creating: "레슨 생성 중\u2026", settings: "설정", export: "JSON 내보내기",
           createHelp: "YouTube 자막을 켠 뒤 이 영상의 봉인된 레슨을 만드세요.",
+          providerLabel: "제공자", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
+          provider_custom: "사용자 지정(OpenAI 호환 HTTPS)", apiKeyLabel: "API 키",
+          modelLabel: "모델(선택)", studyLanguageLabel: "학습 언어(BCP 47)",
+          endpointLabel: "API 엔드포인트(HTTPS)", saveSettings: "설정 저장",
+          keySavedPrefix: "저장된 키:",
           noCaptions: "이 페이지에 자막이 없습니다. 먼저 자막을 켜 주세요.",
           digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 다시 만들거나 기존 레슨을 내보내세요.",
           regenerate: "레슨 다시 만들기",
-          needKey: "설정에서 API 엔드포인트와 키를 먼저 입력하세요.",
+          needKey: "제공자를 고르고 API 키를 붙여넣은 뒤 설정을 저장하세요.",
           insecureEndpoint: "API 엔드포인트는 HTTPS여야 합니다(로컬 테스트는 http://localhost 허용).",
           incomplete: "레슨이 완성되지 않았습니다. 다시 만들기로 남은 줄을 채우세요.",
           confirmCall: "이 영상의 자막 줄을 모델 엔드포인트로 보낼까요?",
@@ -67,10 +79,15 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", add: "+ 生词: ",
           create: "创建课程", creating: "正在创建课程\u2026", settings: "设置", export: "导出 JSON",
           createHelp: "打开 YouTube 字幕后，为本视频创建密封课程。",
+          providerLabel: "提供商", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
+          provider_custom: "自定义(OpenAI 兼容 HTTPS)", apiKeyLabel: "API 密钥",
+          modelLabel: "模型(可选)", studyLanguageLabel: "学习语言(BCP 47)",
+          endpointLabel: "API 端点(HTTPS)", saveSettings: "保存设置",
+          keySavedPrefix: "已保存密钥:",
           noCaptions: "此页面没有字幕，请先打开字幕。",
           digestChanged: "字幕已变更，与已存课程不一致。请重新生成或导出旧课程。",
           regenerate: "重新生成课程",
-          needKey: "请先在设置中填写 API 端点和密钥。",
+          needKey: "请选择提供商并粘贴 API 密钥，然后保存设置。",
           insecureEndpoint: "API 端点须为 HTTPS（本地测试允许 http://localhost）。",
           incomplete: "课程未完成。请再次创建以补全剩余行。",
           confirmCall: "将此视频的字幕行发送到您的模型端点？",
@@ -82,10 +99,15 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", add: "+ 単語帳: ",
           create: "レッスン作成", creating: "レッスン作成中\u2026", settings: "設定", export: "JSON エクスポート",
           createHelp: "YouTube の字幕をオンにしてから、この動画の密封レッスンを作成してください。",
+          providerLabel: "プロバイダ", provider_openrouter: "OpenRouter", provider_openai: "OpenAI",
+          provider_custom: "カスタム(OpenAI 互換 HTTPS)", apiKeyLabel: "API キー",
+          modelLabel: "モデル(任意)", studyLanguageLabel: "学習言語(BCP 47)",
+          endpointLabel: "API エンドポイント(HTTPS)", saveSettings: "設定を保存",
+          keySavedPrefix: "保存済みキー:",
           noCaptions: "このページに字幕がありません。先に字幕をオンにしてください。",
           digestChanged: "保存済みレッスン以降に字幕が変わりました。再生成するか古いレッスンをエクスポートしてください。",
           regenerate: "レッスンを再生成",
-          needKey: "設定で API エンドポイントとキーを入力してください。",
+          needKey: "プロバイダを選び API キーを貼り付け、設定を保存してください。",
           insecureEndpoint: "API エンドポイントは HTTPS である必要があります（ローカルテストは http://localhost 可）。",
           incomplete: "レッスンが未完成です。もう一度作成して残りの行を埋めてください。",
           confirmCall: "この動画の字幕行をモデルエンドポイントに送信しますか？",
@@ -120,6 +142,12 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   var createStatusEl = null;
   var createBusy = false;
   var createVideoId = null;
+  var settingsProviderEl = null;
+  var settingsKeyEl = null;
+  var settingsModelEl = null;
+  var settingsStudyEl = null;
+  var settingsEndpointEl = null;
+  var settingsEndpointWrap = null;
   var digestChangedActive = false;
   var listEl = null;
   var rows = [];
@@ -953,8 +981,139 @@ var LESSONS = /*__LESSONS_JSON__*/null;
       createPanel = null;
       createStatusEl = null;
     }
+    settingsProviderEl = null;
+    settingsKeyEl = null;
+    settingsModelEl = null;
+    settingsStudyEl = null;
+    settingsEndpointEl = null;
+    settingsEndpointWrap = null;
     createVideoId = null;
     createBusy = false;
+  }
+
+  function settingsInputStyle(colors) {
+    return "font-size:12px;padding:6px 8px;border-radius:6px;border:1px solid " + colors.border +
+      ";background:" + colors.bg + ";color:" + colors.fg + ";width:100%;box-sizing:border-box;";
+  }
+
+  function settingsFieldWrap(label, input, colors) {
+    var wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+    var lab = document.createElement("label");
+    lab.textContent = label;
+    lab.style.cssText = "font-size:11px;color:" + colors.muted + ";";
+    input.style.cssText = settingsInputStyle(colors);
+    wrap.appendChild(lab);
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  function readSettingsFromForm() {
+    var provider = settingsProviderEl ? normalizeProvider(settingsProviderEl.value) : "openrouter";
+    var publicSettings = {
+      provider: provider,
+      study_language: settingsStudyEl && settingsStudyEl.value ? settingsStudyEl.value.trim() : "ko",
+    };
+    if (settingsModelEl && settingsModelEl.value.trim()) publicSettings.model = settingsModelEl.value.trim();
+    if (provider === "custom" && settingsEndpointEl && settingsEndpointEl.value.trim()) {
+      publicSettings.custom_endpoint = settingsEndpointEl.value.trim();
+    }
+    var apiKey = settingsKeyEl && settingsKeyEl.value.trim() ? settingsKeyEl.value.trim() : loadApiKey();
+    return { publicSettings: publicSettings, apiKey: apiKey };
+  }
+
+  function syncProviderFields() {
+    if (!settingsProviderEl) return;
+    var text = uiStrings();
+    var provider = normalizeProvider(settingsProviderEl.value);
+    if (settingsEndpointWrap) {
+      settingsEndpointWrap.style.display = provider === "custom" ? "flex" : "none";
+    }
+    if (settingsModelEl && !settingsModelEl.value.trim()) {
+      settingsModelEl.placeholder = resolveProviderModel(provider, "");
+    }
+    var savedKey = loadApiKey();
+    if (settingsKeyEl) {
+      settingsKeyEl.placeholder = savedKey ? text.keySavedPrefix + " " + maskApiKey(savedKey) : text.apiKeyLabel;
+    }
+  }
+
+  function populateSettingsForm() {
+    if (!settingsProviderEl) return;
+    var publicSettings = loadAuthoringSettingsPublic();
+    var provider = normalizeProvider(publicSettings.provider);
+    settingsProviderEl.value = provider;
+    if (settingsModelEl) {
+      settingsModelEl.value = publicSettings.model || "";
+      settingsModelEl.placeholder = resolveProviderModel(provider, "");
+    }
+    if (settingsStudyEl) settingsStudyEl.value = publicSettings.study_language || "ko";
+    if (settingsEndpointEl) settingsEndpointEl.value = publicSettings.custom_endpoint || "";
+    if (settingsKeyEl) settingsKeyEl.value = "";
+    syncProviderFields();
+  }
+
+  function saveSettingsFromForm() {
+    var form = readSettingsFromForm();
+    saveAuthoringSettings(form.publicSettings, form.apiKey);
+    if (settingsKeyEl) settingsKeyEl.value = "";
+    syncProviderFields();
+    setCreateStatus("");
+  }
+
+  function buildSettingsSection(colors, text) {
+    var section = document.createElement("div");
+    section.setAttribute("data-ysp", "settings");
+    section.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid " +
+      colors.border + ";border-radius:8px;background:" + colors.chip + ";";
+
+    var heading = document.createElement("div");
+    heading.textContent = text.settings;
+    heading.style.cssText = "font-size:12px;font-weight:700;";
+    section.appendChild(heading);
+
+    settingsProviderEl = document.createElement("select");
+    ["openrouter", "openai", "custom"].forEach(function (value) {
+      var option = document.createElement("option");
+      option.value = value;
+      option.textContent = text["provider_" + value];
+      settingsProviderEl.appendChild(option);
+    });
+    settingsProviderEl.addEventListener("change", syncProviderFields);
+    section.appendChild(settingsFieldWrap(text.providerLabel, settingsProviderEl, colors));
+
+    settingsKeyEl = document.createElement("input");
+    settingsKeyEl.type = "password";
+    settingsKeyEl.autocomplete = "off";
+    section.appendChild(settingsFieldWrap(text.apiKeyLabel, settingsKeyEl, colors));
+
+    settingsModelEl = document.createElement("input");
+    settingsModelEl.type = "text";
+    settingsModelEl.autocomplete = "off";
+    section.appendChild(settingsFieldWrap(text.modelLabel, settingsModelEl, colors));
+
+    settingsStudyEl = document.createElement("input");
+    settingsStudyEl.type = "text";
+    settingsStudyEl.autocomplete = "off";
+    section.appendChild(settingsFieldWrap(text.studyLanguageLabel, settingsStudyEl, colors));
+
+    settingsEndpointEl = document.createElement("input");
+    settingsEndpointEl.type = "url";
+    settingsEndpointEl.autocomplete = "off";
+    settingsEndpointWrap = settingsFieldWrap(text.endpointLabel, settingsEndpointEl, colors);
+    section.appendChild(settingsEndpointWrap);
+
+    var saveBtn = document.createElement("button");
+    saveBtn.textContent = text.saveSettings;
+    saveBtn.style.cssText =
+      "font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
+      "background:" + colors.fg + ";color:" + colors.bg + ";align-self:flex-start;";
+    saveBtn.addEventListener("click", saveSettingsFromForm);
+    section.appendChild(saveBtn);
+
+    populateSettingsForm();
+    hydrateApiKey(function () { populateSettingsForm(); });
+    return section;
   }
 
   function setCreateStatus(message) {
@@ -964,26 +1123,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   function pageTitle() {
     var heading = document.querySelector("h1.ytd-watch-metadata yt-formatted-string, h1 yt-formatted-string");
     return heading && heading.textContent ? heading.textContent.trim() : "";
-  }
-
-  function openSettingsForm() {
-    var text = uiStrings();
-    var settings = loadAuthoringSettings();
-    var endpoint = window.prompt(text.settings + " — API endpoint (https://…)", settings.endpoint || "");
-    if (endpoint === null) return;
-    var apiKey = window.prompt(text.settings + " — API key", settings.apiKey || "");
-    if (apiKey === null) return;
-    var model = window.prompt(text.settings + " — model", settings.model || "gpt-4o-mini");
-    if (model === null) return;
-    var studyLanguage = window.prompt(text.settings + " — study language (BCP 47)", settings.study_language || "ko");
-    if (studyLanguage === null) return;
-    saveAuthoringSettings({
-      endpoint: endpoint.trim(),
-      apiKey: apiKey.trim(),
-      model: model.trim() || "gpt-4o-mini",
-      study_language: studyLanguage.trim() || "ko",
-    });
-    setCreateStatus("");
   }
 
   function sessionDigestDiffers(storedDigest, callback) {
@@ -1006,12 +1145,17 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   }
 
   function startCreateLesson(videoId, options) {
+    hydrateApiKey(function () { startCreateLessonReady(videoId, options); });
+  }
+
+  function startCreateLessonReady(videoId, options) {
     options = options || {};
     if (createBusy) return;
     if (lessonForCompiled(videoId)) return;
+    saveSettingsFromForm();
     var text = uiStrings();
     var settings = loadAuthoringSettings();
-    if (!settings.endpoint || !settings.apiKey) {
+    if (!settings) {
       setCreateStatus(text.needKey);
       return;
     }
@@ -1094,6 +1238,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     createStatusEl.style.cssText = "font-size:12px;color:" + colors.trans + ";min-height:1.2em;";
     createPanel.appendChild(createStatusEl);
 
+    createPanel.appendChild(buildSettingsSection(colors, text));
+
     var row = document.createElement("div");
     row.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;";
     var createBtn = document.createElement("button");
@@ -1104,18 +1250,12 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     createBtn.addEventListener("click", function () { startCreateLesson(videoId); });
     row.appendChild(createBtn);
 
-    var settingsBtn = document.createElement("button");
-    settingsBtn.textContent = text.settings;
-    settingsBtn.style.cssText =
-      "font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-      "background:" + colors.chip + ";color:" + colors.fg + ";";
-    settingsBtn.addEventListener("click", openSettingsForm);
-    row.appendChild(settingsBtn);
-
     if (local && local.lesson && isLessonComplete(local.lesson)) {
       var exportBtn = document.createElement("button");
       exportBtn.textContent = text.export;
-      exportBtn.style.cssText = settingsBtn.style.cssText;
+      exportBtn.style.cssText =
+        "font-size:12px;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
+        "background:" + colors.chip + ";color:" + colors.fg + ";";
       exportBtn.addEventListener("click", function () { exportLessonJson(local.lesson); });
       row.appendChild(exportBtn);
     }

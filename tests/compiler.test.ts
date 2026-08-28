@@ -66,7 +66,13 @@ describe("runtime template contract", () => {
     expect(libraryTemplate.split(LESSONS_SLOT)).toHaveLength(2);
     expect(libraryTemplate.split(AUTHORING_SLOT)).toHaveLength(2);
     expect(libraryTemplate).toContain("// ==UserScript==");
+    expect(libraryTemplate).toContain("@name         Malgwi Panel");
+    expect(libraryTemplate).toContain("@inject-into  content");
     expect(libraryTemplate).toContain("GM_xmlhttpRequest");
+    expect(libraryTemplate).toContain("GM.setValue");
+    expect(libraryTemplate).toContain("GM.getValue");
+    expect(libraryTemplate).not.toContain("@connect");
+    expect(libraryTemplate).not.toContain("window.prompt");
     expect(libraryTemplate).not.toContain("innerHTML");
     const other = structuredClone(lessonFixture);
     other.video.video_id = "zzz999AAA_-";

@@ -18,10 +18,25 @@ import { readFileSync } from "node:fs";
 export const LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
 export const LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
 export const AUTHORING_SETTINGS_KEY = "ysp:authoring:v1";
+export const AUTHORING_API_KEY_STORAGE_KEY = "ysp:authoring:apiKey:v1";
+
+export type ProviderPreset = "openrouter" | "openai" | "custom";
+
+export const PROVIDER_PRESETS = {
+  openrouter: {
+    endpoint: "https://openrouter.ai/api/v1",
+    defaultModel: "openai/gpt-4o-mini",
+  },
+  openai: {
+    endpoint: "https://api.openai.com/v1",
+    defaultModel: "gpt-4o-mini",
+  },
+} as const satisfies Record<Exclude<ProviderPreset, "custom">, { endpoint: string; defaultModel: string }>;
 
 /** Injected into runtime/authoring.template.js so browser digests match lesson.ts. */
 export const CANONICAL_JSON_SLOT = "/*__CANONICAL_JSON__*/";
 export const AUTHORING_CORE_SLOT = "/*__AUTHORING_CORE__*/";
+export const PROVIDER_PRESETS_SLOT = "/*__PROVIDER_PRESETS__*/";
 export const TEST_HOOKS_SLOT = "/*__TEST_HOOKS__*/";
 export const BROWSER_CANONICAL_JSON_SOURCE = `function canonicalJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -33,12 +48,64 @@ export const BROWSER_CANONICAL_JSON_SOURCE = `function canonicalJson(value) {
   return "{" + entries.join(",") + "}";
 }`;
 
+export const BROWSER_PROVIDER_PRESETS_SOURCE = `var PROVIDER_PRESETS = {
+  openrouter: { endpoint: "https://openrouter.ai/api/v1", defaultModel: "openai/gpt-4o-mini" },
+  openai: { endpoint: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini" }
+};
+function normalizeProvider(value) {
+  if (value === "openai" || value === "custom") return value;
+  return "openrouter";
+}
+function resolveProviderEndpoint(provider, customEndpoint) {
+  if (provider === "custom") return String(customEndpoint || "").trim();
+  return PROVIDER_PRESETS[provider].endpoint;
+}
+function resolveProviderModel(provider, modelOverride) {
+  var trimmed = String(modelOverride || "").trim();
+  if (trimmed) return trimmed;
+  if (provider === "custom") return "gpt-4o-mini";
+  return PROVIDER_PRESETS[provider].defaultModel;
+}
+function resolveAuthoringSettings(publicSettings, apiKey) {
+  var provider = normalizeProvider(publicSettings && publicSettings.provider);
+  var endpoint = resolveProviderEndpoint(provider, publicSettings && publicSettings.custom_endpoint);
+  var model = resolveProviderModel(provider, publicSettings && publicSettings.model);
+  var studyLanguage = publicSettings && publicSettings.study_language ? String(publicSettings.study_language).trim() : "ko";
+  var key = String(apiKey || "").trim();
+  if (!endpoint || !key) return null;
+  return { provider: provider, endpoint: endpoint, apiKey: key, model: model, study_language: studyLanguage || "ko" };
+}
+function maskApiKey(apiKey) {
+  var key = String(apiKey || "");
+  if (key.length <= 4) return "";
+  return "\\u2022\\u2022\\u2022\\u2022" + key.slice(-4);
+}
+function publicSettingsForStorage(publicSettings) {
+  var provider = normalizeProvider(publicSettings && publicSettings.provider);
+  var stored = {
+    provider: provider,
+    study_language: publicSettings && publicSettings.study_language ? String(publicSettings.study_language).trim() || "ko" : "ko",
+  };
+  if (publicSettings && publicSettings.model) stored.model = String(publicSettings.model).trim();
+  if (provider === "custom" && publicSettings && publicSettings.custom_endpoint) {
+    stored.custom_endpoint = String(publicSettings.custom_endpoint).trim();
+  }
+  return stored;
+}`;
+
 export const BROWSER_TEST_HOOKS_SOURCE = `if (typeof window !== "undefined") {
   window.__yspTestHooks = {
     setReadSessionCaptions: function (fn) { readSessionCaptionsImpl = fn; },
     captionDigest: captionDigest,
     storeLocalLesson: storeLocalLesson,
     resolveLocalLesson: resolveLocalLesson,
+    loadAuthoringSettings: loadAuthoringSettings,
+    saveAuthoringSettings: saveAuthoringSettings,
+    loadApiKey: loadApiKey,
+    saveApiKey: saveApiKey,
+    hydrateApiKey: hydrateApiKey,
+    resolveAuthoringSettings: resolveAuthoringSettings,
+    publicSettingsForStorage: publicSettingsForStorage,
   };
 }`;
 
@@ -50,9 +117,13 @@ export function prepareAuthoringModule(source: string, options?: { testHooks?: b
   if (!source.includes(AUTHORING_CORE_SLOT)) {
     throw new Error("authoring template missing authoring core slot");
   }
+  if (!source.includes(PROVIDER_PRESETS_SLOT)) {
+    throw new Error("authoring template missing provider presets slot");
+  }
   const core = readFileSync(new URL("../runtime/authoring-core.browser.js", import.meta.url), "utf8");
   return source
     .replace(CANONICAL_JSON_SLOT, BROWSER_CANONICAL_JSON_SOURCE)
+    .replace(PROVIDER_PRESETS_SLOT, BROWSER_PROVIDER_PRESETS_SOURCE)
     .replace(AUTHORING_CORE_SLOT, () => core)
     .replace(TEST_HOOKS_SLOT, () => (options?.testHooks ? BROWSER_TEST_HOOKS_SOURCE : ""));
 }
@@ -87,11 +158,78 @@ export const DEFAULT_LINE_CAP = 200;
 /** Lines per model request when batching. */
 export const DEFAULT_BATCH_SIZE = 40;
 
+/** Non-secret settings persisted in page localStorage. */
+export interface AuthoringSettingsPublic {
+  readonly provider?: ProviderPreset;
+  readonly model?: string;
+  readonly custom_endpoint?: string;
+  readonly study_language?: string;
+}
+
+/** Resolved settings used for model calls. */
 export interface AuthoringSettings {
+  readonly provider: ProviderPreset;
   readonly endpoint: string;
   readonly apiKey: string;
   readonly model: string;
   readonly study_language: string;
+}
+
+export function normalizeProvider(value: unknown): ProviderPreset {
+  if (value === "openai" || value === "custom") return value;
+  return "openrouter";
+}
+
+export function resolveProviderEndpoint(provider: ProviderPreset, customEndpoint?: string): string {
+  if (provider === "custom") return String(customEndpoint ?? "").trim();
+  return PROVIDER_PRESETS[provider].endpoint;
+}
+
+export function resolveProviderModel(provider: ProviderPreset, modelOverride?: string): string {
+  const trimmed = String(modelOverride ?? "").trim();
+  if (trimmed) return trimmed;
+  if (provider === "custom") return "gpt-4o-mini";
+  return PROVIDER_PRESETS[provider].defaultModel;
+}
+
+/** Merge public settings with a separately stored API key. */
+export function resolveAuthoringSettings(
+  publicSettings: AuthoringSettingsPublic,
+  apiKey: string,
+): AuthoringSettings | null {
+  const provider = normalizeProvider(publicSettings.provider);
+  const endpoint = resolveProviderEndpoint(provider, publicSettings.custom_endpoint);
+  const model = resolveProviderModel(provider, publicSettings.model);
+  const studyLanguage = String(publicSettings.study_language ?? "ko").trim() || "ko";
+  const key = String(apiKey).trim();
+  if (!endpoint || !key) return null;
+  return { provider, endpoint, apiKey: key, model, study_language: studyLanguage };
+}
+
+/** Placeholder for a saved key field without exposing the full secret. */
+export function maskApiKey(apiKey: string): string {
+  if (apiKey.length <= 4) return "";
+  return `\u2022\u2022\u2022\u2022${apiKey.slice(-4)}`;
+}
+
+/** Strip secrets before writing authoring settings to page storage. */
+export function publicSettingsForStorage(publicSettings: AuthoringSettingsPublic): AuthoringSettingsPublic {
+  const provider = normalizeProvider(publicSettings.provider);
+  const stored: AuthoringSettingsPublic = {
+    provider,
+    study_language: String(publicSettings.study_language ?? "ko").trim() || "ko",
+  };
+  if (publicSettings.model) stored.model = String(publicSettings.model).trim();
+  if (provider === "custom" && publicSettings.custom_endpoint) {
+    stored.custom_endpoint = String(publicSettings.custom_endpoint).trim();
+  }
+  return stored;
+}
+
+/** True when a serialized lesson document accidentally embeds the API key. */
+export function lessonContainsSecret(lesson: unknown, secret: string): boolean {
+  if (!secret) return false;
+  return JSON.stringify(lesson).includes(secret);
 }
 
 /** True when the model endpoint is an absolute HTTPS URL (HTTP localhost for tests). */

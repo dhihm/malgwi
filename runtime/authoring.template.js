@@ -3,11 +3,14 @@
 var LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
 var LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
 var AUTHORING_SETTINGS_KEY = "ysp:authoring:v1";
+var AUTHORING_API_KEY_STORAGE_KEY = "ysp:authoring:apiKey:v1";
 var AUTHORING_CONFIRM_KEY = "ysp:authoring:confirm:v1";
 var LINE_CAP = 200;
 var BATCH_SIZE = 40;
+var memoryApiKey = "";
 
 /*__CANONICAL_JSON__*/
+/*__PROVIDER_PRESETS__*/
 /*__AUTHORING_CORE__*/
 
 function sha256Hex(text) {
@@ -87,23 +90,100 @@ function isAuthoringEndpointAllowed(endpoint) {
   }
 }
 
-function loadAuthoringSettings() {
+function gmDotted() {
+  try {
+    return typeof GM === "object" && GM ? GM : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function gmGetValue(key) {
+  if (typeof GM_getValue === "function") {
+    var syncValue = GM_getValue(key, "");
+    if (key === AUTHORING_API_KEY_STORAGE_KEY && syncValue) memoryApiKey = String(syncValue);
+    return syncValue;
+  }
+  if (key === AUTHORING_API_KEY_STORAGE_KEY) return memoryApiKey;
+  return "";
+}
+
+function gmSetValue(key, value) {
+  if (key === AUTHORING_API_KEY_STORAGE_KEY) memoryApiKey = String(value || "");
+  if (typeof GM_setValue === "function") {
+    GM_setValue(key, value);
+    return;
+  }
+  var dotted = gmDotted();
+  if (dotted && typeof dotted.setValue === "function") {
+    try { dotted.setValue(key, value); } catch (error) { /* ignore */ }
+  }
+}
+
+function hydrateApiKey(done) {
+  function finish() {
+    if (typeof done === "function") done();
+  }
+  if (typeof GM_getValue === "function") {
+    var syncValue = GM_getValue(AUTHORING_API_KEY_STORAGE_KEY, "");
+    if (syncValue) memoryApiKey = String(syncValue);
+    finish();
+    return;
+  }
+  var dotted = gmDotted();
+  if (dotted && typeof dotted.getValue === "function") {
+    Promise.resolve(dotted.getValue(AUTHORING_API_KEY_STORAGE_KEY, "")).then(function (value) {
+      if (value) memoryApiKey = String(value);
+      finish();
+    }, function () { finish(); });
+    return;
+  }
+  finish();
+}
+
+function loadApiKey() {
+  return String(gmGetValue(AUTHORING_API_KEY_STORAGE_KEY) || memoryApiKey || "");
+}
+
+function saveApiKey(apiKey) {
+  gmSetValue(AUTHORING_API_KEY_STORAGE_KEY, String(apiKey || ""));
+}
+
+function loadAuthoringSettingsPublic() {
   try {
     var value = JSON.parse(window.localStorage.getItem(AUTHORING_SETTINGS_KEY) || "{}");
-    return value && typeof value === "object" ? value : {};
+    if (!value || typeof value !== "object") value = {};
+    if (value.endpoint && !value.provider) {
+      value.provider = "custom";
+      value.custom_endpoint = value.endpoint;
+      delete value.endpoint;
+    }
+    if (value.apiKey) {
+      saveApiKey(value.apiKey);
+      delete value.apiKey;
+      window.localStorage.setItem(AUTHORING_SETTINGS_KEY, JSON.stringify(publicSettingsForStorage(value)));
+    }
+    return value;
   } catch (error) {
     return {};
   }
 }
 
-function saveAuthoringSettings(patch) {
+function loadAuthoringSettings() {
+  return resolveAuthoringSettings(loadAuthoringSettingsPublic(), loadApiKey());
+}
+
+function saveAuthoringSettingsPublic(publicSettings) {
   try {
-    var value = loadAuthoringSettings();
-    for (var key in patch) value[key] = patch[key];
-    window.localStorage.setItem(AUTHORING_SETTINGS_KEY, JSON.stringify(value));
+    window.localStorage.setItem(AUTHORING_SETTINGS_KEY, JSON.stringify(publicSettingsForStorage(publicSettings)));
   } catch (error) {
     /* private mode */
   }
+}
+
+function saveAuthoringSettings(publicSettings, apiKey) {
+  saveAuthoringSettingsPublic(publicSettings);
+  if (typeof apiKey === "string" && apiKey.trim()) saveApiKey(apiKey.trim());
 }
 
 function confirmedForVideo(videoId) {
@@ -194,8 +274,8 @@ function buildLessonDraft(captions, videoId, studyLanguage, sourceLanguage, titl
 }
 
 function resolveLocalLesson(videoId, studyLanguage) {
-  var settings = loadAuthoringSettings();
-  var wantedStudy = studyLanguage || settings.study_language || "ko";
+  var publicSettings = loadAuthoringSettingsPublic();
+  var wantedStudy = studyLanguage || publicSettings.study_language || "ko";
   var index = loadLocalIndex();
   for (var i = 0; i < index.length; i += 1) {
     var entry = index[i];
