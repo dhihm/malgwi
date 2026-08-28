@@ -31,6 +31,13 @@ language (English, Korean, Chinese, Japanese).
 Everything runs locally in your browser. No account, no server, no AI
 at view time, and nothing leaves your machine.
 
+> **Malgwi is not a live translator.** Lessons are prepared **per
+> video, ahead of time**: a host (typically an AI agent you run)
+> translates the subtitles once, and the result is compiled into your
+> userscript. The panel appears only on videos you have prepared —
+> on any other video, nothing shows. One-time preparation per video,
+> then unlimited offline-quality studying.
+
 ---
 
 ## Studying with Malgwi
@@ -61,7 +68,20 @@ file updates everything.
 
 Visit the video on `youtube.com` as usual. The Malgwi panel appears on
 the right for any video in your library, and disappears on videos you
-have not studied.
+have not studied. Switching between videos just works — the panel
+follows YouTube's in-page navigation.
+
+### The study loop
+
+Adding a video to your library is a one-time preparation:
+
+1. Pick a video and get its subtitles as a file (see
+   [Getting subtitles](#getting-subtitles)).
+2. Have your host build the lesson — translate, build, and refresh the
+   library userscript (see [Building lessons](#building-lessons)).
+3. Replace your installed `study-library.user.js` with the rebuilt one.
+4. Study: every prepared video now shows the panel, forever, with no
+   further cost.
 
 ### Panel controls
 
@@ -174,6 +194,24 @@ player. Serve it over HTTP (`python3 -m http.server`) rather than
 opening the file directly — YouTube requires a referrer for embedded
 playback. When a video's owner disables embedding, the page degrades
 gracefully to a floating video window driven by the same jump buttons.
+
+---
+
+## FAQ
+
+**Why doesn't the panel appear on some video?**
+It is not in your library. Malgwi only knows the videos whose lessons
+were prepared and compiled into your userscript — prepare the video
+(see [the study loop](#the-study-loop)) and rebuild the library.
+
+**Can it translate any video live?**
+No, by design. Translation happens once at build time, with whatever
+model your host uses; at view time there is no AI, no network, and no
+API key. That is what keeps studying free, fast, and private.
+
+**Do my vocabulary words leave my browser?**
+No. Vocabulary and panel settings live in your browser's
+`localStorage` only.
 
 ---
 
