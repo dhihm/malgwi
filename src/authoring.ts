@@ -13,6 +13,7 @@ import {
   validateCaptions,
   validateLesson,
 } from "./lesson.ts";
+import { readFileSync } from "node:fs";
 
 export const LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
 export const LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
@@ -20,6 +21,8 @@ export const AUTHORING_SETTINGS_KEY = "ysp:authoring:v1";
 
 /** Injected into runtime/authoring.template.js so browser digests match lesson.ts. */
 export const CANONICAL_JSON_SLOT = "/*__CANONICAL_JSON__*/";
+export const AUTHORING_CORE_SLOT = "/*__AUTHORING_CORE__*/";
+export const TEST_HOOKS_SLOT = "/*__TEST_HOOKS__*/";
 export const BROWSER_CANONICAL_JSON_SOURCE = `function canonicalJson(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
@@ -30,12 +33,28 @@ export const BROWSER_CANONICAL_JSON_SOURCE = `function canonicalJson(value) {
   return "{" + entries.join(",") + "}";
 }`;
 
-/** Prepare the authoring runtime module with the shared canonicalJson implementation. */
-export function prepareAuthoringModule(source: string): string {
+export const BROWSER_TEST_HOOKS_SOURCE = `if (typeof window !== "undefined") {
+  window.__yspTestHooks = {
+    setReadSessionCaptions: function (fn) { readSessionCaptionsImpl = fn; },
+    captionDigest: captionDigest,
+    storeLocalLesson: storeLocalLesson,
+    resolveLocalLesson: resolveLocalLesson,
+  };
+}`;
+
+/** Prepare the authoring runtime module with shared browser implementations. */
+export function prepareAuthoringModule(source: string, options?: { testHooks?: boolean }): string {
   if (!source.includes(CANONICAL_JSON_SLOT)) {
     throw new Error("authoring template missing canonical JSON slot");
   }
-  return source.replace(CANONICAL_JSON_SLOT, BROWSER_CANONICAL_JSON_SOURCE);
+  if (!source.includes(AUTHORING_CORE_SLOT)) {
+    throw new Error("authoring template missing authoring core slot");
+  }
+  const core = readFileSync(new URL("../runtime/authoring-core.browser.js", import.meta.url), "utf8");
+  return source
+    .replace(CANONICAL_JSON_SLOT, BROWSER_CANONICAL_JSON_SOURCE)
+    .replace(AUTHORING_CORE_SLOT, () => core)
+    .replace(TEST_HOOKS_SLOT, () => (options?.testHooks ? BROWSER_TEST_HOOKS_SOURCE : ""));
 }
 
 /** Verify browser canonicalJson matches the compiler implementation. */
@@ -73,6 +92,21 @@ export interface AuthoringSettings {
   readonly apiKey: string;
   readonly model: string;
   readonly study_language: string;
+}
+
+/** True when the model endpoint is an absolute HTTPS URL (HTTP localhost for tests). */
+export function isAuthoringEndpointAllowed(endpoint: string): boolean {
+  try {
+    const url = new URL(endpoint);
+    if (!url.hostname) return false;
+    if (url.protocol === "https:") return true;
+    if (url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1")) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export interface LocalLessonIndexEntry {
