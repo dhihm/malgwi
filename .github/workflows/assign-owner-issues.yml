@@ -1,0 +1,18 @@
+name: assign owner issues
+on:
+  issues:
+    types: [opened]
+permissions:
+  issues: write
+jobs:
+  assign:
+    if: github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign to owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: gh issue edit "$N" --repo "$REPO" --add-assignee "$OWNER"
