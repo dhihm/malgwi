@@ -42,9 +42,17 @@ describe("caption digest parity", () => {
   });
 
   test("prepareAuthoringModule injects the shared canonicalJson implementation", () => {
-    const prepared = prepareAuthoringModule(authoringTemplate);
+    const prepared = prepareAuthoringModule(authoringTemplate, { testHooks: true });
     expect(prepared).toContain("return a < b ? -1 : a > b ? 1 : 0");
     expect(prepared).not.toContain("/*__CANONICAL_JSON__*/");
+    expect(prepared).not.toContain("/*__AUTHORING_CORE__*/");
+    expect(prepared).toContain("__yspTestHooks");
+  });
+
+  test("production authoring modules omit test hooks", () => {
+    const prepared = prepareAuthoringModule(authoringTemplate);
+    expect(prepared).not.toContain("__yspTestHooks");
+    expect(prepared).not.toContain("/*__TEST_HOOKS__*/");
   });
 });
 
@@ -60,6 +68,11 @@ describe("authoring endpoint policy", () => {
 
   test("rejects plain HTTP endpoints", () => {
     expect(isAuthoringEndpointAllowed("http://api.example.test/v1")).toBe(false);
+  });
+
+  test("rejects relative endpoints", () => {
+    expect(isAuthoringEndpointAllowed("/v1")).toBe(false);
+    expect(isAuthoringEndpointAllowed("chat/completions")).toBe(false);
   });
 });
 

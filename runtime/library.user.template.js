@@ -4,7 +4,8 @@
 // @version      3.9
 // @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, vocabulary book, and watch-page lesson creation for new videos.
 // @match        https://www.youtube.com/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      *
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -14,7 +15,6 @@
  * augments the display and seeks the player locally in the user's browser.
  * All lesson text reaches the DOM through textContent only. */
 var LESSONS = /*__LESSONS_JSON__*/null;
-/*__AUTHORING_MODULE__*/
 
 (function () {
   if (!Array.isArray(LESSONS) || LESSONS.length === 0) return;
@@ -22,6 +22,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
    * older per-video build left installed) must not double-mount. */
   if (window.__yspPanelActive) return;
   window.__yspPanelActive = true;
+  /*__AUTHORING_MODULE__*/
   var VOCAB_KEY = "ysp:vocab:v1";
   /* Unicode-aware: Latin words, CJK sequences, or short phrases. */
   var WORD_SHAPE = /^[\p{L}\p{N}][\p{L}\p{N}'’-]*(?: [\p{L}\p{N}'’-]+){0,3}$/u;
@@ -140,6 +141,12 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   var resizing = null;
   var panelWidth = null;
   var panelHeight = null;
+  var mountedLessonKey = "";
+
+  function lessonMountKey(someLesson) {
+    if (!someLesson || !someLesson.video) return "";
+    return someLesson.video.video_id + "\0" + (someLesson.study_language || "") + "\0" + (someLesson.source_digest || "");
+  }
 
   function loadUi() {
     try {
@@ -903,9 +910,11 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   function mount(next, options) {
     options = options || {};
     var nextDigestChanged = !!options.digestChanged;
-    if (panel && lesson === next && digestChangedActive === nextDigestChanged) return;
+    var nextKey = lessonMountKey(next);
+    if (panel && mountedLessonKey === nextKey && digestChangedActive === nextDigestChanged) return;
     unmount();
     lesson = next;
+    mountedLessonKey = nextKey;
     digestChangedActive = nextDigestChanged;
     buildPanel();
     timer = window.setInterval(tick, 200);
@@ -935,6 +944,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     repeatArmed = false;
     lesson = null;
     digestChangedActive = false;
+    mountedLessonKey = "";
   }
 
   function unmountCreate() {

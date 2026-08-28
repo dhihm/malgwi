@@ -19,6 +19,7 @@ import { captionDigest, validateCaptions } from "../src/lesson.ts";
 const template = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
 const authoringModule = prepareAuthoringModule(
   readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
+  { testHooks: true },
 );
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
 
@@ -84,7 +85,7 @@ function createHarness(
   script: string,
   sharedStorage?: Map<string, string>,
   uiLanguage = "ko-KR",
-  options: { fetchImpl?: typeof fetch; confirmImpl?: () => boolean } = {},
+  options: { fetchImpl?: typeof fetch; confirmImpl?: () => boolean; gmXhr?: boolean } = {},
 ) {
   const nodes: StubNode[] = [];
 
@@ -170,6 +171,8 @@ function createHarness(
   let selectionText = "";
   let selectionAnchor: StubNode | null = null;
   const confirmImpl = options.confirmImpl ?? (() => true);
+  const fetchImpl = options.fetchImpl ?? (() => Promise.reject(new Error("fetch disabled in tests")));
+  const useGmXhr = options.gmXhr !== false;
 
   async function sha256Hex(text: string) {
     const { createHash } = await import("node:crypto");
@@ -221,7 +224,33 @@ function createHarness(
       return 1;
     },
     confirm: () => confirmImpl(),
-    fetch: options.fetchImpl ?? (() => Promise.reject(new Error("fetch disabled in tests"))),
+    fetch: fetchImpl,
+    GM_xmlhttpRequest: useGmXhr
+      ? (request: {
+          method?: string;
+          url: string;
+          headers?: Record<string, string>;
+          data?: string;
+          onload: (response: { status: number; response: unknown }) => void;
+          onerror: () => void;
+        }) => {
+          fetchImpl(request.url, {
+            method: request.method || "GET",
+            headers: request.headers,
+            body: request.data,
+          })
+            .then(async (response) => {
+              let body: unknown = null;
+              try {
+                body = await response.json();
+              } catch {
+                body = null;
+              }
+              request.onload({ status: response.status, response: body });
+            })
+            .catch(() => request.onerror());
+        }
+      : undefined,
     open: (url: string) => void opened.push(url),
     getSelection: () => ({
       isCollapsed: selectionText.length === 0,
@@ -1035,5 +1064,84 @@ describe("library userscript runtime smoke", () => {
     await harness.flush();
     expect(harness.panel()).toBeNull();
     expect(harness.createPanel()).not.toBeNull();
+  });
+
+  test("check() does not remount the same local lesson on every poll tick", async () => {
+    const videoId = "stable00001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stable line." }]);
+    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
+    const sealed = sealLesson({
+      ...draft,
+      lines: [{ ...draft.lines[0]!, pronunciation: "p", translation: "t" }],
+    });
+    const storage = new Map<string, string>();
+    storeSealedLocalLesson(storage, sealed);
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.navigate(videoId);
+    await harness.flush();
+    const panel = harness.panel();
+    expect(panel).not.toBeNull();
+    for (let index = 0; index < 6; index += 1) {
+      harness.tick();
+      await harness.flush();
+    }
+    expect(harness.panel()).toBe(panel);
+  });
+
+  test("resolveLocalLesson honors the configured study_language", async () => {
+    const videoId = "study000001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Shared video." }]);
+    const koDraft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
+    const enDraft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "en");
+    const koSealed = sealLesson({
+      ...koDraft,
+      lines: [{ ...koDraft.lines[0]!, pronunciation: "ko-p", translation: "ko-t" }],
+    });
+    const enSealed = sealLesson({
+      ...enDraft,
+      lines: [{ ...enDraft.lines[0]!, pronunciation: "en-p", translation: "en-t" }],
+    });
+    const storage = new Map<string, string>();
+    storage.set(localLessonStorageKey(videoId, "ko", koSealed.source_digest), JSON.stringify(koSealed));
+    storage.set(localLessonStorageKey(videoId, "en", enSealed.source_digest), JSON.stringify(enSealed));
+    storage.set(
+      LOCAL_LESSON_INDEX_KEY,
+      JSON.stringify([
+        { video_id: videoId, study_language: "ko", source_digest: koSealed.source_digest, complete: true },
+        { video_id: videoId, study_language: "en", source_digest: enSealed.source_digest, complete: true },
+      ]),
+    );
+    storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "https://example.test/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.navigate(videoId);
+    await harness.flush();
+    const resolved = harness.windowStub.__yspTestHooks!.resolveLocalLesson(videoId) as {
+      lesson: { study_language: string; lines: { translation: string }[] };
+    };
+    expect(resolved.lesson.study_language).toBe("ko");
+    expect(resolved.lesson.lines[0]!.translation).toBe("ko-t");
+  });
+
+  test("compiled library videos do not show a create panel", async () => {
+    const harness = createHarness(compileLibraryScript([lesson]), new Map(), "en-US");
+    await harness.flush();
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.createPanel()).toBeNull();
   });
 });
