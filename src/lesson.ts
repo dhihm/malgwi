@@ -302,7 +302,6 @@ export function firstOriginalMismatch(captions: readonly CaptionLine[], lesson: 
 
 export const LESSON_SLOT = "/*__LESSON_JSON__*/null";
 export const LESSONS_SLOT = "/*__LESSONS_JSON__*/null";
-export const AUTHORING_SLOT = "/*__AUTHORING_MODULE__*/";
 
 function inlineJson(value: unknown): string {
   return canonicalJson(value)
@@ -329,11 +328,7 @@ export function compilePage(template: string, lesson: LessonV2): string {
  * Inject a whole validated lesson collection into the library template, so
  * one installed userscript covers every studied video.
  */
-export function compileLibrary(
-  template: string,
-  lessons: readonly LessonV2[],
-  authoringModule?: string,
-): string {
+export function compileLibrary(template: string, lessons: readonly LessonV2[]): string {
   if (lessons.length === 0) fail("a library needs at least one lesson");
   const seen = new Set<string>();
   for (const lesson of lessons) {
@@ -344,13 +339,5 @@ export function compileLibrary(
   if (lessonOccurrences !== 1) {
     fail(`library template must contain the lessons slot exactly once, found ${lessonOccurrences}`);
   }
-  let result = template.replace(LESSONS_SLOT, () => inlineJson(lessons));
-  if (authoringModule !== undefined) {
-    const authoringOccurrences = result.split(AUTHORING_SLOT).length - 1;
-    if (authoringOccurrences !== 1) {
-      fail(`library template must contain the authoring slot exactly once, found ${authoringOccurrences}`);
-    }
-    result = result.replace(AUTHORING_SLOT, () => authoringModule);
-  }
-  return result;
+  return template.replace(LESSONS_SLOT, () => inlineJson(lessons));
 }
