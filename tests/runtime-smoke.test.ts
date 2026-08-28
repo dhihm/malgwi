@@ -14,7 +14,7 @@ import {
   LOCAL_LESSON_INDEX_KEY,
 } from "../src/authoring.ts";
 import { compileLibrary, validateLesson } from "../src/lesson.ts";
-import { validateCaptions } from "../src/lesson.ts";
+import { captionDigest, validateCaptions } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
 const authoringModule = prepareAuthoringModule(
@@ -24,6 +24,35 @@ const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample
 
 function compileLibraryScript(lessons: ReturnType<typeof validateLesson>[]) {
   return compileLibrary(template, lessons, authoringModule);
+}
+
+function storeSealedLocalLesson(storage: Map<string, string>, sealed: ReturnType<typeof sealLesson>) {
+  storage.set(
+    localLessonStorageKey(sealed.video.video_id, sealed.study_language, sealed.source_digest),
+    JSON.stringify(sealed),
+  );
+  storage.set(
+    LOCAL_LESSON_INDEX_KEY,
+    JSON.stringify(
+      upsertLocalLessonIndex([], {
+        video_id: sealed.video.video_id,
+        study_language: sealed.study_language,
+        source_digest: sealed.source_digest,
+        complete: true,
+      }),
+    ),
+  );
+}
+
+function digestBanner(panel: StubNode | null) {
+  if (!panel) return null;
+  const queue = [...panel.children];
+  while (queue.length > 0) {
+    const candidate = queue.shift()!;
+    if (candidate.attrs["data-ysp"] === "digest-banner") return candidate;
+    queue.push(...candidate.children);
+  }
+  return null;
 }
 
 interface StubNode {
@@ -245,6 +274,7 @@ function createHarness(
       nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null,
     createPanel: () =>
       nodes.find((node) => node.id === "ysp-create-panel" && body.contains(node)) ?? null,
+    digestBanner: () => digestBanner(nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null),
   };
 }
 
@@ -576,27 +606,166 @@ describe("library userscript runtime smoke", () => {
       lines: [{ ...draft.lines[0]!, pronunciation: "오프", translation: "오프라인 줄." }],
     });
     const storage = new Map<string, string>();
-    storage.set(
-      localLessonStorageKey(videoId, "ko", sealed.source_digest),
-      JSON.stringify(sealed),
-    );
-    storage.set(
-      LOCAL_LESSON_INDEX_KEY,
-      JSON.stringify(
-        upsertLocalLessonIndex([], {
-          video_id: videoId,
-          study_language: "ko",
-          source_digest: sealed.source_digest,
-          complete: true,
-        }),
-      ),
-    );
+    storeSealedLocalLesson(storage, sealed);
     const harness = createHarness(compileLibraryScript([lesson]), storage);
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
     harness.navigate(videoId);
     await harness.flush();
     expect(harness.createPanel()).toBeNull();
     expect(harness.panel()).not.toBeNull();
+    expect(harness.digestBanner()).toBeNull();
     expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Offline line.");
+  });
+
+  test("revisit with matching session captions stays offline without a digest banner", async () => {
+    const videoId = "digest00001";
+    const captions = validateCaptions([
+      { start_ms: 0, end_ms: 1000, text: "Still the same cue." },
+    ]);
+    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
+    const sealed = sealLesson({
+      ...draft,
+      lines: [{ ...draft.lines[0]!, pronunciation: "p", translation: "t" }],
+    });
+    expect(sealed.source_digest).toBe(captionDigest(captions));
+    const storage = new Map<string, string>();
+    storeSealedLocalLesson(storage, sealed);
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.navigate(videoId);
+    await harness.flush();
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.digestBanner()).toBeNull();
+    expect(harness.createPanel()).toBeNull();
+  });
+
+  test("revisit detects caption digest changes and keeps the stored lesson visible", async () => {
+    const videoId = "digest00002";
+    const storedCaptions = validateCaptions([
+      { start_ms: 0, end_ms: 1000, text: "Original stored cue." },
+    ]);
+    const draft = buildLessonDraft(
+      storedCaptions,
+      { provider: "youtube", video_id: videoId, source_language: "en" },
+      "ko",
+    );
+    const sealed = sealLesson({
+      ...draft,
+      lines: [{ ...draft.lines[0]!, pronunciation: "stored", translation: "저장됨" }],
+    });
+    const changedCaptions = validateCaptions([
+      { start_ms: 0, end_ms: 1000, text: "Updated player cue." },
+    ]);
+    expect(captionDigest(changedCaptions)).not.toBe(sealed.source_digest);
+    const storage = new Map<string, string>();
+    storeSealedLocalLesson(storage, sealed);
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: changedCaptions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.navigate(videoId);
+    await harness.flush();
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.digestBanner()).not.toBeNull();
+    const original = harness.nodes.find((node) => node.textContent === "Original stored cue.");
+    expect(original).toBeDefined();
+  });
+
+  test("revisit without loaded session captions keeps the stored lesson without a false digest banner", async () => {
+    const videoId = "digest00003";
+    const captions = validateCaptions([
+      { start_ms: 0, end_ms: 1000, text: "No player captions yet." },
+    ]);
+    const draft = buildLessonDraft(captions, { provider: "youtube", video_id: videoId, source_language: "en" }, "ko");
+    const sealed = sealLesson({
+      ...draft,
+      lines: [{ ...draft.lines[0]!, pronunciation: "p", translation: "t" }],
+    });
+    const storage = new Map<string, string>();
+    storeSealedLocalLesson(storage, sealed);
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({ error: "no_captions" }));
+    harness.navigate(videoId);
+    await harness.flush();
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.digestBanner()).toBeNull();
+  });
+
+  test("regenerate replaces a stored lesson after captions change", async () => {
+    const videoId = "digest00004";
+    const storedCaptions = validateCaptions([
+      { start_ms: 0, end_ms: 1200, text: "Old cue." },
+    ]);
+    const draft = buildLessonDraft(
+      storedCaptions,
+      { provider: "youtube", video_id: videoId, source_language: "en" },
+      "ko",
+    );
+    const sealed = sealLesson({
+      ...draft,
+      lines: [{ ...draft.lines[0]!, pronunciation: "old", translation: "옛 줄" }],
+    });
+    const changedCaptions = validateCaptions([
+      { start_ms: 0, end_ms: 1200, text: "Fresh cue." },
+      { start_ms: 1200, end_ms: 2400, text: "Second fresh cue." },
+    ]);
+    const storage = new Map<string, string>();
+    storeSealedLocalLesson(storage, sealed);
+    let fetchCalls = 0;
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US", {
+      fetchImpl: () => {
+        fetchCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  lines: [
+                    { pronunciation: "new1", translation: "t1" },
+                    { pronunciation: "new2", translation: "t2" },
+                  ],
+                }),
+              },
+            }],
+          }),
+        } as Response);
+      },
+    });
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: changedCaptions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.storage.set(
+      "ysp:authoring:v1",
+      JSON.stringify({
+        endpoint: "https://example.test/v1",
+        apiKey: "test-key",
+        model: "test-model",
+        study_language: "ko",
+      }),
+    );
+    harness.navigate(videoId);
+    await harness.flush();
+    const regenBtn = harness.nodes.find((node) => node.textContent === "Regenerate lesson");
+    expect(regenBtn).toBeDefined();
+    regenBtn!.fire("click");
+    await harness.flush();
+    await harness.flush();
+    await harness.flush();
+    expect(fetchCalls).toBe(1);
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.digestBanner()).toBeNull();
+    expect(harness.panel()!.children[2]!.children).toHaveLength(2);
+    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Fresh cue.");
+    expect(harness.storage.get(LOCAL_LESSON_INDEX_KEY)).toContain(captionDigest(changedCaptions));
   });
 
   test("compiled library lessons win over a stored local lesson", async () => {

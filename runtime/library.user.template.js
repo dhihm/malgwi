@@ -38,6 +38,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           createHelp: "Turn on YouTube captions, then create a sealed lesson for this video.",
           noCaptions: "No captions on this page \u2014 turn on subtitles first.",
           digestChanged: "Captions changed since the stored lesson. Regenerate or export the old one.",
+          regenerate: "Regenerate lesson",
           needKey: "Set an API endpoint and key in Settings first.",
           confirmCall: "Send lines to your model endpoint for this video?",
           saved: "Lesson saved. Study offline from now on." },
@@ -50,6 +51,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           createHelp: "YouTube 자막을 켠 뒤 이 영상의 봉인된 레슨을 만드세요.",
           noCaptions: "이 페이지에 자막이 없습니다. 먼저 자막을 켜 주세요.",
           digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 다시 만들거나 기존 레슨을 내보내세요.",
+          regenerate: "레슨 다시 만들기",
           needKey: "설정에서 API 엔드포인트와 키를 먼저 입력하세요.",
           confirmCall: "이 영상의 자막 줄을 모델 엔드포인트로 보낼까요?",
           saved: "레슨이 저장되었습니다. 이제 오프라인으로 학습할 수 있습니다." },
@@ -62,6 +64,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           createHelp: "打开 YouTube 字幕后，为本视频创建密封课程。",
           noCaptions: "此页面没有字幕，请先打开字幕。",
           digestChanged: "字幕已变更，与已存课程不一致。请重新生成或导出旧课程。",
+          regenerate: "重新生成课程",
           needKey: "请先在设置中填写 API 端点和密钥。",
           confirmCall: "将此视频的字幕行发送到您的模型端点？",
           saved: "课程已保存，之后可离线学习。" },
@@ -74,6 +77,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           createHelp: "YouTube の字幕をオンにしてから、この動画の密封レッスンを作成してください。",
           noCaptions: "このページに字幕がありません。先に字幕をオンにしてください。",
           digestChanged: "保存済みレッスン以降に字幕が変わりました。再生成するか古いレッスンをエクスポートしてください。",
+          regenerate: "レッスンを再生成",
           needKey: "設定で API エンドポイントとキーを入力してください。",
           confirmCall: "この動画の字幕行をモデルエンドポイントに送信しますか？",
           saved: "レッスンを保存しました。以降はオフラインで学習できます。" }
@@ -107,6 +111,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   var createStatusEl = null;
   var createBusy = false;
   var createVideoId = null;
+  var digestChangedActive = false;
   var listEl = null;
   var rows = [];
   var activeIndex = -1;
@@ -774,6 +779,38 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     header.appendChild(chipButton(text.collapse, function () { return false; }, function () { setCollapsed(true); }));
     panel.appendChild(header);
 
+    if (digestChangedActive) {
+      var banner = document.createElement("div");
+      banner.setAttribute("data-ysp", "digest-banner");
+      banner.style.cssText =
+        "font-size:12px;color:" + colors.pron + ";padding:8px 12px;border-bottom:1px solid " + colors.border + ";";
+      var bannerText = document.createElement("div");
+      bannerText.textContent = text.digestChanged;
+      banner.appendChild(bannerText);
+      var bannerRow = document.createElement("div");
+      bannerRow.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;";
+      var regenBtn = document.createElement("button");
+      regenBtn.textContent = text.regenerate;
+      regenBtn.style.cssText =
+        "font-size:12px;padding:4px 10px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
+        "background:" + colors.fg + ";color:" + colors.bg + ";";
+      regenBtn.addEventListener("click", function () {
+        if (lesson && lesson.video) regenerateLesson(lesson.video.video_id);
+      });
+      bannerRow.appendChild(regenBtn);
+      var exportBtn = document.createElement("button");
+      exportBtn.textContent = text.export;
+      exportBtn.style.cssText =
+        "font-size:12px;padding:4px 10px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
+        "background:" + colors.chip + ";color:" + colors.fg + ";";
+      exportBtn.addEventListener("click", function () {
+        if (lesson) exportLessonJson(lesson);
+      });
+      bannerRow.appendChild(exportBtn);
+      banner.appendChild(bannerRow);
+      panel.appendChild(banner);
+    }
+
     var help = document.createElement("div");
     help.textContent = text.help;
     help.style.cssText = "font-size:11px;color:" + colors.muted + ";padding:6px 12px 0;";
@@ -855,10 +892,13 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     if (tab) tab.style.display = collapsed ? "block" : "none";
   }
 
-  function mount(next) {
-    if (panel && lesson === next) return;
+  function mount(next, options) {
+    options = options || {};
+    var nextDigestChanged = !!options.digestChanged;
+    if (panel && lesson === next && digestChangedActive === nextDigestChanged) return;
     unmount();
     lesson = next;
+    digestChangedActive = nextDigestChanged;
     buildPanel();
     timer = window.setInterval(tick, 200);
     if (collapsed) setCollapsed(true);
@@ -886,6 +926,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     repeatMode = 0;
     repeatArmed = false;
     lesson = null;
+    digestChangedActive = false;
   }
 
   function unmountCreate() {
@@ -927,7 +968,27 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     setCreateStatus("");
   }
 
-  function startCreateLesson(videoId) {
+  function sessionDigestDiffers(storedDigest, callback) {
+    var capture = readSessionCaptionsImpl();
+    if (capture.error || !capture.captions || capture.captions.length === 0) {
+      callback(null);
+      return;
+    }
+    captionDigest(capture.captions).then(function (currentDigest) {
+      callback(currentDigest !== storedDigest);
+    }).catch(function () {
+      callback(null);
+    });
+  }
+
+  function regenerateLesson(videoId) {
+    unmount();
+    mountCreate(videoId);
+    startCreateLesson(videoId, { forceRegenerate: true });
+  }
+
+  function startCreateLesson(videoId, options) {
+    options = options || {};
     if (createBusy) return;
     if (lessonForCompiled(videoId)) return;
     var text = uiStrings();
@@ -949,12 +1010,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     var sourceLanguage = capture.language || "en";
     buildLessonDraft(capture.captions, videoId, studyLanguage, sourceLanguage.split("-")[0], pageTitle())
       .then(function (draft) {
-        var local = resolveLocalLesson(videoId);
-        if (local && local.lesson.source_digest !== draft.source_digest && isLessonComplete(local.lesson)) {
-          createBusy = false;
-          setCreateStatus(text.digestChanged);
-          return null;
-        }
         storeLocalLesson(draft, false);
         return runAuthoringBatches(draft, settings, function (phase, current, total) {
           setCreateStatus(text.creating + " (" + current + "/" + total + ")");
@@ -976,7 +1031,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
       });
   }
 
-  function buildCreatePanel(videoId, local) {
+  function buildCreatePanel(videoId, local, digestChanged) {
     var colors = palette();
     var text = uiStrings();
     createPanel = document.createElement("div");
@@ -997,8 +1052,9 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     help.style.cssText = "font-size:12px;color:" + colors.muted + ";";
     createPanel.appendChild(help);
 
-    if (local && local.lesson && isLessonComplete(local.lesson)) {
+    if (digestChanged) {
       var digestNote = document.createElement("div");
+      digestNote.setAttribute("data-ysp", "digest-note");
       digestNote.textContent = text.digestChanged;
       digestNote.style.cssText = "font-size:12px;color:" + colors.pron + ";";
       createPanel.appendChild(digestNote);
@@ -1041,7 +1097,23 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     if (createPanel && createVideoId === videoId) return;
     unmountCreate();
     createVideoId = videoId;
-    buildCreatePanel(videoId, resolveLocalLesson(videoId));
+    var local = resolveLocalLesson(videoId);
+    buildCreatePanel(videoId, local, false);
+    if (local && local.lesson && isLessonComplete(local.lesson)) {
+      sessionDigestDiffers(local.lesson.source_digest, function (changed) {
+        if (createVideoId !== videoId || !createPanel) return;
+        if (changed !== true) return;
+        var note = createPanel.querySelector('[data-ysp="digest-note"]');
+        if (note) return;
+        var colors = palette();
+        var text = uiStrings();
+        note = document.createElement("div");
+        note.setAttribute("data-ysp", "digest-note");
+        note.textContent = text.digestChanged;
+        note.style.cssText = "font-size:12px;color:" + colors.pron + ";";
+        createPanel.insertBefore(note, createStatusEl);
+      });
+    }
   }
 
   function check() {
@@ -1058,8 +1130,11 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     }
     var local = resolveLocalLesson(videoId);
     if (local && isLessonComplete(local.lesson)) {
-      unmountCreate();
-      mount(local.lesson);
+      sessionDigestDiffers(local.lesson.source_digest, function (changed) {
+        if (currentVideoId() !== videoId) return;
+        unmountCreate();
+        mount(local.lesson, { digestChanged: changed === true });
+      });
       return;
     }
     unmount();
