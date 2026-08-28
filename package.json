@@ -1,0 +1,14 @@
+{
+  "name": "malgwi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "build": "bun compiler/build.ts",
+    "pin": "bun scripts/pin.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

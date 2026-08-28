@@ -1,0 +1,19 @@
+# Pull requests are not accepted in this repository; see CONTRIBUTING.md.
+name: close pull requests
+on:
+  pull_request_target:
+    types: [opened, reopened]
+permissions:
+  pull-requests: write
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close with policy comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr close "$PR" --repo "$REPO" --comment \
+            "Thanks for the interest! Malgwi does not accept pull requests — it is developed solo (see CONTRIBUTING.md). If this fixes a bug, please open an issue describing it so it can be fixed upstream; forks are always welcome under the MIT license."

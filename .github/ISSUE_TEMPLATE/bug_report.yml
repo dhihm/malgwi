@@ -1,0 +1,99 @@
+name: Bug report
+description: Something in Malgwi does not work as expected
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Screenshots make bugs far easier to fix —
+        you can drag & drop images directly into any text field below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong?
+      placeholder: e.g. Pressing the repeat button on line 0:42 does nothing; the button stays highlighted.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag & drop an image here — ideally showing the panel and the page around it.
+    validations:
+      required: false
+  - type: dropdown
+    id: artifact
+    attributes:
+      label: What are you using?
+      options:
+        - Library userscript (study-library.user.js)
+        - Per-video userscript (study.user.js)
+        - Standalone page (index.html)
+        - Compiler / toolkit itself
+    validations:
+      required: true
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser
+      options:
+        - Chrome
+        - Safari
+        - Firefox
+        - Edge
+        - Other (say which below)
+    validations:
+      required: true
+  - type: dropdown
+    id: manager
+    attributes:
+      label: Userscript manager
+      options:
+        - Tampermonkey
+        - Userscripts (Safari)
+        - Other (say which below)
+        - Not applicable (standalone page / toolkit)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. macOS 15.6 / Windows 11 / iOS 18
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Malgwi script version
+      description: The `@version` line near the top of your `.user.js` file.
+      placeholder: e.g. 3.8
+    validations:
+      required: false
+  - type: input
+    id: video
+    attributes:
+      label: Video URL (optional)
+      description: Only if the problem is specific to one video.
+    validations:
+      required: false
+  - type: textarea
+    id: console
+    attributes:
+      label: Console errors (optional)
+      description: "Open the browser console (View > Developer > JavaScript Console, or F12) and paste any red errors here."
+      render: text
+    validations:
+      required: false

@@ -1,0 +1,7 @@
+[
+  { "start_ms": 400, "end_ms": 2100, "text": "What are you doing here?" },
+  { "start_ms": 2100, "end_ms": 4300, "text": "I could ask you the same thing." },
+  { "start_ms": 4600, "end_ms": 7000, "text": "I thought you left town last week." },
+  { "start_ms": 7000, "end_ms": 9500, "text": "Plans change. I got a call from an old friend." },
+  { "start_ms": 9900, "end_ms": 11800, "text": "Well, it's good to see you again." }
+]

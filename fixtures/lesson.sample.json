@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "video": {
+    "provider": "youtube",
+    "video_id": "abc123XYZ_-",
+    "source_language": "en",
+    "title": "Sample dialogue"
+  },
+  "source_digest": "1fc65b41d89102a646134614a321ef35f04a27e754412545d8ee4f40bd21c8ed",
+  "lines": [
+    {
+      "start_ms": 400,
+      "end_ms": 2100,
+      "original": "What are you doing here?",
+      "pronunciation": "왓 아 유 두잉 히어?",
+      "translation": "여기서 뭐 하고 있어?"
+    },
+    {
+      "start_ms": 2100,
+      "end_ms": 4300,
+      "original": "I could ask you the same thing.",
+      "pronunciation": "아이 쿠드 애스크 유 더 세임 씽.",
+      "translation": "그건 내가 묻고 싶은 말인데."
+    },
+    {
+      "start_ms": 4600,
+      "end_ms": 7000,
+      "original": "I thought you left town last week.",
+      "pronunciation": "아이 쏘트 유 레프트 타운 라스트 위크.",
+      "translation": "지난주에 이 동네를 떠난 줄 알았어."
+    },
+    {
+      "start_ms": 7000,
+      "end_ms": 9500,
+      "original": "Plans change. I got a call from an old friend.",
+      "pronunciation": "플랜즈 체인지. 아이 갓 어 콜 프럼 언 올드 프렌드.",
+      "translation": "계획은 바뀌는 법이지. 옛 친구한테 연락이 왔거든."
+    },
+    {
+      "start_ms": 9900,
+      "end_ms": 11800,
+      "original": "Well, it's good to see you again.",
+      "pronunciation": "웰, 이츠 굿 투 씨 유 어겐.",
+      "translation": "아무튼, 다시 만나서 반가워."
+    }
+  ],
+  "study_language": "ko"
+}

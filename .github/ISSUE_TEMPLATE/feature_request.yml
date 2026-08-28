@@ -1,0 +1,25 @@
+name: Feature request
+description: An idea to make Malgwi better
+title: "[idea] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What should Malgwi do, and what studying problem does it solve for you?
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How you handle it today (optional)
+    validations:
+      required: false
+  - type: textarea
+    id: sketch
+    attributes:
+      label: Sketch or screenshot (optional)
+      description: Drag & drop an image if it helps explain the idea.
+    validations:
+      required: false
