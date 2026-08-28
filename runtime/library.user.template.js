@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Malgwi
+// @name         Malgwi Panel
 // @namespace    https://github.com/dhihm/malgwi
 // @version      3.11
 // @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
