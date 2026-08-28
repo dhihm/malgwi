@@ -90,22 +90,59 @@ function isAuthoringEndpointAllowed(endpoint) {
   }
 }
 
+function gmDotted() {
+  try {
+    return typeof GM === "object" && GM ? GM : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function gmGetValue(key) {
-  if (typeof GM_getValue === "function") return GM_getValue(key, "");
+  if (typeof GM_getValue === "function") {
+    var syncValue = GM_getValue(key, "");
+    if (key === AUTHORING_API_KEY_STORAGE_KEY && syncValue) memoryApiKey = String(syncValue);
+    return syncValue;
+  }
   if (key === AUTHORING_API_KEY_STORAGE_KEY) return memoryApiKey;
   return "";
 }
 
 function gmSetValue(key, value) {
+  if (key === AUTHORING_API_KEY_STORAGE_KEY) memoryApiKey = String(value || "");
   if (typeof GM_setValue === "function") {
     GM_setValue(key, value);
     return;
   }
-  if (key === AUTHORING_API_KEY_STORAGE_KEY) memoryApiKey = value;
+  var dotted = gmDotted();
+  if (dotted && typeof dotted.setValue === "function") {
+    try { dotted.setValue(key, value); } catch (error) { /* ignore */ }
+  }
+}
+
+function hydrateApiKey(done) {
+  function finish() {
+    if (typeof done === "function") done();
+  }
+  if (typeof GM_getValue === "function") {
+    var syncValue = GM_getValue(AUTHORING_API_KEY_STORAGE_KEY, "");
+    if (syncValue) memoryApiKey = String(syncValue);
+    finish();
+    return;
+  }
+  var dotted = gmDotted();
+  if (dotted && typeof dotted.getValue === "function") {
+    Promise.resolve(dotted.getValue(AUTHORING_API_KEY_STORAGE_KEY, "")).then(function (value) {
+      if (value) memoryApiKey = String(value);
+      finish();
+    }, function () { finish(); });
+    return;
+  }
+  finish();
 }
 
 function loadApiKey() {
-  return String(gmGetValue(AUTHORING_API_KEY_STORAGE_KEY) || "");
+  return String(gmGetValue(AUTHORING_API_KEY_STORAGE_KEY) || memoryApiKey || "");
 }
 
 function saveApiKey(apiKey) {

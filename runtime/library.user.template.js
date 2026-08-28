@@ -1112,6 +1112,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     section.appendChild(saveBtn);
 
     populateSettingsForm();
+    hydrateApiKey(function () { populateSettingsForm(); });
     return section;
   }
 
@@ -1144,6 +1145,10 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   }
 
   function startCreateLesson(videoId, options) {
+    hydrateApiKey(function () { startCreateLessonReady(videoId, options); });
+  }
+
+  function startCreateLessonReady(videoId, options) {
     options = options || {};
     if (createBusy) return;
     if (lessonForCompiled(videoId)) return;

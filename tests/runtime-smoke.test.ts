@@ -128,7 +128,7 @@ function createHarness(
   script: string,
   sharedStorage?: Map<string, string>,
   uiLanguage = "ko-KR",
-  options: { fetchImpl?: typeof fetch; confirmImpl?: () => boolean; gmXhr?: boolean } = {},
+  options: { fetchImpl?: typeof fetch; confirmImpl?: () => boolean; gmXhr?: boolean; gmApi?: "underscore" | "dotted" | "none" } = {},
 ) {
   const nodes: StubNode[] = [];
 
@@ -220,6 +220,7 @@ function createHarness(
   const confirmImpl = options.confirmImpl ?? (() => true);
   const fetchImpl = options.fetchImpl ?? (() => Promise.reject(new Error("fetch disabled in tests")));
   const useGmXhr = options.gmXhr !== false;
+  const gmApi = options.gmApi ?? "underscore";
 
   async function sha256Hex(text: string) {
     const { createHash } = await import("node:crypto");
@@ -318,16 +319,33 @@ function createHarness(
       saveAuthoringSettings: (publicSettings: unknown, apiKey: string) => void;
       loadApiKey: () => string;
       saveApiKey: (apiKey: string) => void;
+      hydrateApiKey: (done?: () => void) => void;
       publicSettingsForStorage: (publicSettings: unknown) => unknown;
     },
   };
 
+  const dottedGM = {
+    getValue: (key: string, fallback = "") => Promise.resolve(gmStorage.get(key) ?? fallback),
+    setValue: (key: string, value: string) => {
+      gmStorage.set(key, value);
+      return Promise.resolve();
+    },
+  };
+  const previousGM = (globalThis as { GM?: unknown }).GM;
+  if (gmApi === "dotted") {
+    (globalThis as { GM?: unknown }).GM = dottedGM;
+  } else {
+    delete (globalThis as { GM?: unknown }).GM;
+  }
   new Function("GM_getValue", "GM_setValue", "window", "document", script)(
-    windowStub.GM_getValue,
-    windowStub.GM_setValue,
+    gmApi === "underscore" ? windowStub.GM_getValue : undefined,
+    gmApi === "underscore" ? windowStub.GM_setValue : undefined,
     windowStub,
     documentStub,
   );
+  if (gmApi !== "dotted") {
+    (globalThis as { GM?: unknown }).GM = previousGM;
+  }
   windowStub.__yspTestHooks = (windowStub as { __yspTestHooks?: typeof windowStub.__yspTestHooks }).__yspTestHooks ?? null;
 
   return {
@@ -1214,6 +1232,64 @@ describe("library userscript runtime smoke", () => {
     expect(requestedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
     expect(harness.storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("user-only-key");
     expect(harness.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("user-only-key");
+  });
+
+  test("Safari GM.getValue Promise storage survives a reload without page localStorage", async () => {
+    const videoId = "safarist01";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Safari line." }]);
+    let requestedUrl = "";
+    const storage = new Map<string, string>();
+    const first = createHarness(compileLibraryScript([lesson]), storage, "en-US", {
+      gmApi: "dotted",
+      fetchImpl: (url) => {
+        requestedUrl = String(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
+          }),
+        } as Response);
+      },
+    });
+    first.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    first.navigate(videoId);
+    await first.flush();
+    const keyInput = first.nodes.find((node) => node.type === "password");
+    keyInput!.value = "safari-user-key";
+    first.nodes.find((node) => node.textContent === "Save settings")!.fire("click");
+    await first.flush();
+    expect(storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("safari-user-key");
+    expect(first.gmStorage.get(AUTHORING_API_KEY_STORAGE_KEY)).toBe("safari-user-key");
+
+    const second = createHarness(compileLibraryScript([lesson]), storage, "en-US", {
+      gmApi: "dotted",
+      fetchImpl: (url) => {
+        requestedUrl = String(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { content: JSON.stringify({ lines: [{ pronunciation: "p", translation: "t" }] }) } }],
+          }),
+        } as Response);
+      },
+    });
+    second.gmStorage.set(AUTHORING_API_KEY_STORAGE_KEY, "safari-user-key");
+    second.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    second.navigate(videoId);
+    await second.flush();
+    await second.flush();
+    second.nodes.find((node) => node.textContent === "Create lesson")!.fire("click");
+    await second.flush();
+    await second.flush();
+    expect(requestedUrl).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(storage.get(AUTHORING_SETTINGS_KEY)).not.toContain("safari-user-key");
+    delete (globalThis as { GM?: unknown }).GM;
   });
 
   test("saved settings keep the API key out of lesson JSON and page localStorage", async () => {

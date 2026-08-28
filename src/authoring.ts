@@ -103,6 +103,7 @@ export const BROWSER_TEST_HOOKS_SOURCE = `if (typeof window !== "undefined") {
     saveAuthoringSettings: saveAuthoringSettings,
     loadApiKey: loadApiKey,
     saveApiKey: saveApiKey,
+    hydrateApiKey: hydrateApiKey,
     resolveAuthoringSettings: resolveAuthoringSettings,
     publicSettingsForStorage: publicSettingsForStorage,
   };
