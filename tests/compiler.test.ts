@@ -3,11 +3,15 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildLessonPage, buildLibraryScript } from "../compiler/build.ts";
-import { compileLibrary, compilePage, LESSON_SLOT, LESSONS_SLOT, LessonValidationError, validateLesson } from "../src/lesson.ts";
+import { prepareAuthoringModule } from "../src/authoring.ts";
+import { compileLibrary, compilePage, LESSON_SLOT, LESSONS_SLOT, AUTHORING_SLOT, LessonValidationError, validateLesson } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/index.template.html", import.meta.url), "utf8");
 const userscript = readFileSync(new URL("../runtime/study.user.template.js", import.meta.url), "utf8");
 const libraryTemplate = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
+const authoringModule = prepareAuthoringModule(
+  readFileSync(new URL("../runtime/authoring.template.js", import.meta.url), "utf8"),
+);
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
 
 describe("runtime template contract", () => {
@@ -56,17 +60,19 @@ describe("runtime template contract", () => {
 
   test("library userscript merges every studied video into one install", () => {
     expect(libraryTemplate.split(LESSONS_SLOT)).toHaveLength(2);
+    expect(libraryTemplate.split(AUTHORING_SLOT)).toHaveLength(2);
     expect(libraryTemplate).toContain("// ==UserScript==");
     expect(libraryTemplate).not.toContain("innerHTML");
     const other = structuredClone(lessonFixture);
     other.video.video_id = "zzz999AAA_-";
-    const script = compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(other)]);
+    const script = compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(other)], authoringModule);
     expect(script).toContain("abc123XYZ_-");
     expect(script).toContain("zzz999AAA_-");
+    expect(script).toContain("Create lesson");
     expect(() =>
-      compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(lessonFixture)]),
+      compileLibrary(libraryTemplate, [validateLesson(lessonFixture), validateLesson(lessonFixture)], authoringModule),
     ).toThrow(/duplicate/u);
-    expect(() => compileLibrary(libraryTemplate, [])).toThrow(LessonValidationError);
+    expect(() => compileLibrary(libraryTemplate, [], authoringModule)).toThrow(LessonValidationError);
     const dir = mkdtempSync(join(tmpdir(), "ysp-lib-"));
     const first = buildLibraryScript([lessonFixture, other], join(dir, "a", "library.user.js"));
     const second = buildLibraryScript([lessonFixture, other], join(dir, "b", "library.user.js"));
