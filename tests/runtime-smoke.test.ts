@@ -1144,4 +1144,35 @@ describe("library userscript runtime smoke", () => {
     expect(harness.panel()).not.toBeNull();
     expect(harness.createPanel()).toBeNull();
   });
+
+  test("navigating compiled to local unmounts the stale panel before digest resolves", async () => {
+    const localVideoId = "localvid001";
+    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stored local cue." }]);
+    const draft = buildLessonDraft(
+      captions,
+      { provider: "youtube", video_id: localVideoId, source_language: "en" },
+      "ko",
+    );
+    const sealed = sealLesson({
+      ...draft,
+      lines: [{ ...draft.lines[0]!, pronunciation: "loc", translation: "로컬" }],
+    });
+    const storage = new Map<string, string>();
+    storeSealedLocalLesson(storage, sealed);
+    const harness = createHarness(compileLibraryScript([lesson]), storage, "en-US");
+    await harness.flush();
+    const compiledOriginal = lesson.lines[0]!.original;
+    expect(harness.nodes.some((node) => node.textContent === compiledOriginal)).toBe(true);
+
+    harness.windowStub.__yspTestHooks!.setReadSessionCaptions(() => ({
+      captions: captions.map((caption) => ({ ...caption })),
+      language: "en",
+    }));
+    harness.navigate(localVideoId);
+    expect(harness.panel()).toBeNull();
+
+    await harness.flush();
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.nodes.some((node) => node.textContent === "Stored local cue.")).toBe(true);
+  });
 });

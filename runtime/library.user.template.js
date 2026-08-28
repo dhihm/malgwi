@@ -1160,6 +1160,9 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     }
     var local = resolveLocalLesson(videoId);
     if (local && isLessonComplete(local.lesson)) {
+      if (lesson && lesson.video && lesson.video.video_id !== videoId) {
+        unmount();
+      }
       sessionDigestDiffers(local.lesson.source_digest, function (changed) {
         if (currentVideoId() !== videoId) return;
         unmountCreate();
