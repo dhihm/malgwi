@@ -238,6 +238,30 @@ describe("library userscript runtime smoke", () => {
     expect(harness.video.played).toBe(true);
   });
 
+  test("the off button hides Malgwi persistently and Alt+M brings it back", () => {
+    const storage = new Map<string, string>();
+    const harness = createHarness(script, storage);
+    const header = harness.panel()!.children[0]!;
+    const off = header.children.find((child) => child.textContent === "✕")!;
+
+    off.fire("click");
+    expect(harness.panel()).toBeNull();
+    expect(storage.get("ysp:panel:v1")).toContain('"off":true');
+    // The off toast tells the user how to come back.
+    expect(harness.nodes.some((node) => node.textContent.includes("Alt+M"))).toBe(true);
+
+    // Off survives a fresh mount in the same browser.
+    const second = createHarness(script, storage);
+    expect(second.panel()).toBeNull();
+
+    // Alt+M toggles it back on (and off again).
+    second.docFire("keydown", { altKey: true, code: "KeyM" });
+    expect(second.panel()).not.toBeNull();
+    expect(storage.get("ysp:panel:v1")).toContain('"off":false');
+    second.docFire("keydown", { altKey: true, code: "KeyM" });
+    expect(second.panel()).toBeNull();
+  });
+
   test("navigating between videos remounts the right lesson", () => {
     const other = validateLesson({
       ...lessonFixture,
