@@ -57,7 +57,10 @@ describe("runtime template contract", () => {
   test("library userscript is playback-only with no model grants", () => {
     expect(libraryTemplate.split(LESSONS_SLOT)).toHaveLength(2);
     expect(libraryTemplate).toContain("// ==UserScript==");
-    expect(libraryTemplate).toContain("@grant        none");
+    // The only manager privilege is the menu entry; nothing data-facing.
+    expect(libraryTemplate).toContain("@grant        GM_registerMenuCommand");
+    expect(libraryTemplate).not.toContain("GM_xmlhttpRequest");
+    expect(libraryTemplate).not.toContain("GM_setValue");
     expect(libraryTemplate).not.toContain("GM_xmlhttpRequest");
     expect(libraryTemplate).not.toContain("GM.setValue");
     expect(libraryTemplate).not.toContain("GM.getValue");

@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         Malgwi Panel
+// @name         Malgwi
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.13
+// @version      3.14
 // @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
 // @match        https://www.youtube.com/*
-// @grant        none
+// @grant        GM_registerMenuCommand
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -35,7 +35,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           follow: "Follow", collapse: "Hide", help: "\u25B6 = jump \u00B7 drag a word = vocabulary \u00B7 drag header = move panel",
           empty: "Vocabulary is empty. Drag a word in the original text to add it.",
           dict: "Dictionary", dictTitle: "Open in a web dictionary", del: "Remove from vocabulary",
-          jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", off: "Turn Malgwi off", on: "Turn Malgwi on", offToast: "Malgwi is off \u2014 press Alt+M (\u2325M) to bring it back.", add: "+ Vocab: ",
+          jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", off: "Turn Malgwi off", on: "Turn Malgwi on", menu: "Toggle Malgwi on/off", offToast: "Malgwi is off \u2014 press Alt+M (\u2325M) to bring it back.", add: "+ Vocab: ",
           notInLibrary: "This video is not in your Malgwi library.",
           export: "Export JSON",
           digestChanged: "Captions changed since the stored lesson. Export the old one or re-author with the local CLI." },
@@ -43,7 +43,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           follow: "따라가기", collapse: "접기", help: "\u25B6 = 구간 점프 \u00B7 원문 드래그 = 단어장 \u00B7 헤더 드래그 = 패널 이동",
           empty: "단어장이 비어 있습니다. 원문에서 단어를 드래그해 추가하세요.",
           dict: "사전", dictTitle: "웹 사전에서 열기", del: "단어장에서 삭제",
-          jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", off: "말귀 끄기", on: "말귀 켜기", offToast: "말귀를 껐습니다 \u2014 Alt+M (\u2325M)으로 다시 켤 수 있습니다.", add: "+ 단어장: ",
+          jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", off: "말귀 끄기", on: "말귀 켜기", menu: "말귀 켜기/끄기", offToast: "말귀를 껐습니다 \u2014 Alt+M (\u2325M)으로 다시 켤 수 있습니다.", add: "+ 단어장: ",
           notInLibrary: "이 영상은 Malgwi 라이브러리에 없습니다.",
           export: "JSON 내보내기",
           digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 내보내거나 로컬 CLI로 다시 작성하세요." },
@@ -51,7 +51,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           follow: "跟随", collapse: "收起", help: "\u25B6 = 跳转 \u00B7 划选单词 = 生词本 \u00B7 拖动标题 = 移动面板",
           empty: "生词本是空的。在原文中划选单词即可添加。",
           dict: "词典", dictTitle: "在网络词典中打开", del: "从生词本删除",
-          jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", off: "关闭 Malgwi", on: "打开 Malgwi", offToast: "Malgwi 已关闭 \u2014 按 Alt+M (\u2325M) 重新打开。", add: "+ 生词: ",
+          jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", off: "关闭 Malgwi", on: "打开 Malgwi", menu: "打开/关闭 Malgwi", offToast: "Malgwi 已关闭 \u2014 按 Alt+M (\u2325M) 重新打开。", add: "+ 生词: ",
           notInLibrary: "此视频不在 Malgwi 库中。",
           export: "导出 JSON",
           digestChanged: "字幕已变更。请导出旧课程，或用本地 CLI 重新编写。" },
@@ -59,7 +59,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           follow: "追従", collapse: "閉じる", help: "\u25B6 = ジャンプ \u00B7 単語ドラッグ = 単語帳 \u00B7 ヘッダードラッグ = 移動",
           empty: "単語帳は空です。原文の単語をドラッグして追加してください。",
           dict: "辞書", dictTitle: "ウェブ辞書で開く", del: "単語帳から削除",
-          jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", off: "Malgwi をオフ", on: "Malgwi をオン", offToast: "Malgwi をオフにしました \u2014 Alt+M (\u2325M) で再表示できます。", add: "+ 単語帳: ",
+          jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", off: "Malgwi をオフ", on: "Malgwi をオン", menu: "Malgwi オン/オフ", offToast: "Malgwi をオフにしました \u2014 Alt+M (\u2325M) で再表示できます。", add: "+ 単語帳: ",
           notInLibrary: "この動画は Malgwi ライブラリにありません。",
           export: "JSON エクスポート",
           digestChanged: "保存済みレッスン以降に字幕が変わりました。エクスポートするか、ローカル CLI で再作成してください。" }
@@ -1169,6 +1169,13 @@ var LESSONS = /*__LESSONS_JSON__*/null;
       setOff(!malgwiOff);
     }
   }, true);
+
+  /* Userscript-manager menu entry (Tampermonkey): instant toggle with
+   * no reload. Managers without the API (Safari Userscripts) simply
+   * skip this; the dot and the shortcut remain. */
+  if (typeof GM_registerMenuCommand === "function") {
+    GM_registerMenuCommand(uiStrings().menu, function () { setOff(!malgwiOff); });
+  }
 
   /* YouTube is a SPA: react to its navigation event, with a slow fallback. */
   window.addEventListener("yt-navigate-finish", function () { window.setTimeout(check, 300); });
