@@ -252,7 +252,6 @@ describe("library userscript runtime smoke", () => {
 
     off.fire("click");
     expect(harness.panel()).toBeNull();
-    expect(storage.get("ysp:panel:v1")).toContain('"off":true');
     // The off toast tells the user how to come back.
     expect(harness.nodes.some((node) => node.textContent.includes("Alt+M"))).toBe(true);
     // A small restore dot stays clickable while everything else is gone.
@@ -262,19 +261,19 @@ describe("library userscript runtime smoke", () => {
     expect(harness.panel()).not.toBeNull();
     expect(harness.nodes.find((node) => node.id === "ysp-restore" && harness.body.contains(node))).toBeUndefined();
 
-    // Off again; it survives a fresh mount, which shows the dot from the start.
+    // Off is session-only: a fresh page load is always ON, even with
+    // whatever state an older build may have stored.
     const offAgain = harness.panel()!.children[0]!.children.find((child) => child.textContent === "✕")!;
     offAgain.fire("click");
+    storage.set("ysp:panel:v1", JSON.stringify({ off: true }));
     const second = createHarness(script, storage);
-    expect(second.panel()).toBeNull();
-    expect(second.nodes.some((node) => node.id === "ysp-restore")).toBe(true);
+    expect(second.panel()).not.toBeNull();
 
-    // Alt+M (window capture phase) toggles it back on (and off again).
+    // Alt+M (window capture phase) toggles within the session.
+    second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
+    expect(second.panel()).toBeNull();
     second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
     expect(second.panel()).not.toBeNull();
-    expect(storage.get("ysp:panel:v1")).toContain('"off":false');
-    second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
-    expect(second.panel()).toBeNull();
   });
 
   test("navigating between videos remounts the right lesson", () => {

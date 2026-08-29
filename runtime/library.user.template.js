@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Malgwi
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.15
+// @version      3.16
 // @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
 // @match        https://www.youtube.com/*
 // @grant        none
@@ -328,8 +328,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   }
 
   function setOff(next) {
+    /* Session-only: Malgwi is always on after a page load. */
     malgwiOff = next;
-    saveUi({ off: next });
     if (next) {
       unmount();
       unmountStatus();
@@ -1157,8 +1157,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     mountStatus();
   }
 
-  malgwiOff = loadUi().off === true;
-  if (malgwiOff) showRestoreDot();
 
   /* Alt+M (Option+M) toggles Malgwi entirely, even while it is off.
    * Capture phase on window: YouTube's own hotkey handlers cannot
