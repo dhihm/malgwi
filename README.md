@@ -109,7 +109,7 @@ Adding a video to your library is a one-time preparation:
 | Drag the header | Move the panel anywhere (it undocks) |
 | `◢` bottom-right grip | Resize the panel |
 | Collapse chip | Fold the panel into a side tab |
-| `✕` | Turn Malgwi off entirely; bring it back via the small dot at the screen edge, `Alt+M` (`⌥M`), or the Tampermonkey menu entry |
+| `✕` | Turn Malgwi off entirely; click the small dot at the screen edge or press `Alt+M` (`⌥M`) to bring it back |
 
 Vocabulary entries and panel placement live in your browser's
 `localStorage` only.

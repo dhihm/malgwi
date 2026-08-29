@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         Malgwi Panel
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.14
+// @version      3.15
 // @description  Malgwi study panel over one YouTube watch page: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
 // @match        https://www.youtube.com/*
-// @grant        GM_registerMenuCommand
+// @grant        none
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -931,12 +931,6 @@ var LESSONS = LESSON ? [LESSON] : null;
     }
   }, true);
 
-  /* Userscript-manager menu entry (Tampermonkey): instant toggle with
-   * no reload. Managers without the API (Safari Userscripts) simply
-   * skip this; the dot and the shortcut remain. */
-  if (typeof GM_registerMenuCommand === "function") {
-    GM_registerMenuCommand(uiStrings().menu, function () { setOff(!malgwiOff); });
-  }
 
   /* YouTube is a SPA: react to its navigation event, with a slow fallback. */
   window.addEventListener("yt-navigate-finish", function () { window.setTimeout(check, 300); });

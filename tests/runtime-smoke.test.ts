@@ -277,24 +277,6 @@ describe("library userscript runtime smoke", () => {
     expect(second.panel()).toBeNull();
   });
 
-  test("a userscript-manager menu command toggles Malgwi when available", () => {
-    const registered: { label: string; run: () => void }[] = [];
-    (globalThis as Record<string, unknown>).GM_registerMenuCommand = (label: string, run: () => void) => {
-      registered.push({ label, run });
-    };
-    try {
-      const harness = createHarness(script);
-      expect(registered).toHaveLength(1);
-      expect(registered[0]!.label).toBe("말귀 켜기/끄기");
-      registered[0]!.run();
-      expect(harness.panel()).toBeNull();
-      registered[0]!.run();
-      expect(harness.panel()).not.toBeNull();
-    } finally {
-      delete (globalThis as Record<string, unknown>).GM_registerMenuCommand;
-    }
-  });
-
   test("navigating between videos remounts the right lesson", () => {
     const other = validateLesson({
       ...lessonFixture,
