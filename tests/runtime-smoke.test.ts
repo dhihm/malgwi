@@ -146,13 +146,16 @@ function createHarness(
     },
   };
 
+  const windowListeners: Record<string, ((event: unknown) => void)[]> = {};
   const windowStub = {
     location, 
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => void storage.set(key, value),
     },
-    addEventListener: () => {},
+    addEventListener: (type: string, handler: (event: unknown) => void) => {
+      (windowListeners[type] ??= []).push(handler);
+    },
     setInterval: (handler: () => void) => {
       intervals.push(handler);
       return intervals.length;
@@ -192,6 +195,9 @@ function createHarness(
     },
     docFire(type: string, event: unknown = {}) {
       for (const handler of documentListeners[type] ?? []) handler(event);
+    },
+    winFire(type: string, event: unknown = {}) {
+      for (const handler of windowListeners[type] ?? []) handler(event);
     },
     navigate(videoId: string | null) {
       location.pathname = videoId === null ? "/" : "/watch";
@@ -249,16 +255,25 @@ describe("library userscript runtime smoke", () => {
     expect(storage.get("ysp:panel:v1")).toContain('"off":true');
     // The off toast tells the user how to come back.
     expect(harness.nodes.some((node) => node.textContent.includes("Alt+M"))).toBe(true);
+    // A small restore dot stays clickable while everything else is gone.
+    const dot = harness.nodes.find((node) => node.id === "ysp-restore" && harness.body.contains(node))!;
+    expect(dot).toBeDefined();
+    dot.fire("click");
+    expect(harness.panel()).not.toBeNull();
+    expect(harness.nodes.find((node) => node.id === "ysp-restore" && harness.body.contains(node))).toBeUndefined();
 
-    // Off survives a fresh mount in the same browser.
+    // Off again; it survives a fresh mount, which shows the dot from the start.
+    const offAgain = harness.panel()!.children[0]!.children.find((child) => child.textContent === "✕")!;
+    offAgain.fire("click");
     const second = createHarness(script, storage);
     expect(second.panel()).toBeNull();
+    expect(second.nodes.some((node) => node.id === "ysp-restore")).toBe(true);
 
-    // Alt+M toggles it back on (and off again).
-    second.docFire("keydown", { altKey: true, code: "KeyM" });
+    // Alt+M (window capture phase) toggles it back on (and off again).
+    second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
     expect(second.panel()).not.toBeNull();
     expect(storage.get("ysp:panel:v1")).toContain('"off":false');
-    second.docFire("keydown", { altKey: true, code: "KeyM" });
+    second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
     expect(second.panel()).toBeNull();
   });
 
