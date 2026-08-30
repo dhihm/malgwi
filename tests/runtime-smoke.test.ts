@@ -5,9 +5,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { webcrypto } from "node:crypto";
-import { buildLessonDraft, sealLesson } from "../src/authoring.ts";
-import { compileLibrary, validateCaptions, validateLesson } from "../src/lesson.ts";
+import { compileLibrary, validateLesson } from "../src/lesson.ts";
 
 const template = readFileSync(new URL("../runtime/library.user.template.js", import.meta.url), "utf8");
 const lessonFixture = JSON.parse(readFileSync(new URL("../fixtures/lesson.sample.json", import.meta.url), "utf8"));
@@ -37,12 +35,7 @@ interface StubNode {
   fire(type: string, event?: unknown): void;
 }
 
-function createHarness(
-  script: string,
-  sharedStorage?: Map<string, string>,
-  uiLanguage = "ko-KR",
-  options: { textTracks?: { mode: string; language: string; cues: { startTime: number; endTime: number; text: string }[] }[] } = {},
-) {
+function createHarness(script: string, sharedStorage?: Map<string, string>, uiLanguage = "ko-KR") {
   const nodes: StubNode[] = [];
 
   function makeNode(tag: string): StubNode {
@@ -119,17 +112,10 @@ function createHarness(
 
   const body = makeNode("body");
   const documentElement = makeNode("html");
-  const video = {
-    currentTime: 0,
-    playbackRate: 1,
-    played: false,
-    textTracks: options.textTracks ?? [],
-    play() { this.played = true; },
-  };
+  const video = { currentTime: 0, playbackRate: 1, played: false, play() { this.played = true; } };
   const storage = sharedStorage ?? new Map<string, string>();
   const opened: string[] = [];
   const intervals: (() => void)[] = [];
-  const location = { pathname: "/watch", search: `?v=${lessonFixture.video.video_id}`, protocol: "https:" };
   let selectionText = "";
   let selectionAnchor: StubNode | null = null;
 
@@ -146,16 +132,13 @@ function createHarness(
     },
   };
 
-  const windowListeners: Record<string, ((event: unknown) => void)[]> = {};
   const windowStub = {
-    location, 
+    location: { pathname: "/watch", search: `?v=${lessonFixture.video.video_id}`, protocol: "https:" },
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => void storage.set(key, value),
     },
-    addEventListener: (type: string, handler: (event: unknown) => void) => {
-      (windowListeners[type] ??= []).push(handler);
-    },
+    addEventListener: () => {},
     setInterval: (handler: () => void) => {
       intervals.push(handler);
       return intervals.length;
@@ -175,7 +158,6 @@ function createHarness(
     innerWidth: 1280,
     innerHeight: 800,
     navigator: { language: uiLanguage },
-    crypto: webcrypto,
   };
 
   new Function("window", "document", script)(windowStub, documentStub);
@@ -196,19 +178,7 @@ function createHarness(
     docFire(type: string, event: unknown = {}) {
       for (const handler of documentListeners[type] ?? []) handler(event);
     },
-    winFire(type: string, event: unknown = {}) {
-      for (const handler of windowListeners[type] ?? []) handler(event);
-    },
-    navigate(videoId: string | null) {
-      location.pathname = videoId === null ? "/" : "/watch";
-      location.search = videoId === null ? "" : `?v=${videoId}`;
-      // The 2s polling fallback drives check() in the harness.
-      for (const handler of intervals) handler();
-    },
-    panel: () =>
-      nodes.find((node) => node.id === "ysp-panel" && body.contains(node)) ?? null,
-    statusPanel: () =>
-      nodes.find((node) => node.id === "ysp-status-panel" && body.contains(node)) ?? null,
+    panel: () => nodes.find((node) => node.id === "ysp-panel") ?? null,
   };
 }
 
@@ -242,65 +212,6 @@ describe("library userscript runtime smoke", () => {
     jump.fire("click");
     expect(harness.video.currentTime).toBeCloseTo(lesson.lines[2]!.start_ms / 1000);
     expect(harness.video.played).toBe(true);
-  });
-
-  test("the off button hides Malgwi persistently and Alt+M brings it back", () => {
-    const storage = new Map<string, string>();
-    const harness = createHarness(script, storage);
-    const header = harness.panel()!.children[0]!;
-    const off = header.children.find((child) => child.textContent === "✕")!;
-
-    off.fire("click");
-    expect(harness.panel()).toBeNull();
-    // The off toast tells the user how to come back.
-    expect(harness.nodes.some((node) => node.textContent.includes("Alt+M"))).toBe(true);
-    // A small restore dot stays clickable while everything else is gone.
-    const dot = harness.nodes.find((node) => node.id === "ysp-restore" && harness.body.contains(node))!;
-    expect(dot).toBeDefined();
-    dot.fire("click");
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.nodes.find((node) => node.id === "ysp-restore" && harness.body.contains(node))).toBeUndefined();
-
-    // Off is session-only: a fresh page load is always ON, even with
-    // whatever state an older build may have stored.
-    const offAgain = harness.panel()!.children[0]!.children.find((child) => child.textContent === "✕")!;
-    offAgain.fire("click");
-    storage.set("ysp:panel:v1", JSON.stringify({ off: true }));
-    const second = createHarness(script, storage);
-    expect(second.panel()).not.toBeNull();
-
-    // Alt+M (window capture phase) toggles within the session.
-    second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
-    expect(second.panel()).toBeNull();
-    second.winFire("keydown", { altKey: true, ctrlKey: false, metaKey: false, code: "KeyM" });
-    expect(second.panel()).not.toBeNull();
-  });
-
-  test("navigating between videos remounts the right lesson", () => {
-    const other = validateLesson({
-      ...lessonFixture,
-      video: { ...lessonFixture.video, video_id: "zzz999AAA_-", title: "Second video" },
-      lines: [
-        { start_ms: 0, end_ms: 1500, original: "Hello again.", pronunciation: "헬로 어겐.", translation: "다시 안녕." },
-      ],
-    });
-    const harness = createHarness(compileLibrary(template, [lesson, other]));
-
-    // Mounted for the first video with its line count.
-    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
-
-    // SPA-navigate to the second studied video: panel rebuilds for it.
-    harness.navigate("zzz999AAA_-");
-    expect(harness.panel()!.children[2]!.children).toHaveLength(1);
-    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Hello again.");
-
-    // Navigate to a video that is not in the library: panel unmounts.
-    harness.navigate("unstudied123".slice(0, 11));
-    expect(harness.panel()).toBeNull();
-
-    // And back to the first video: panel returns.
-    harness.navigate(lesson.video.video_id);
-    expect(harness.panel()!.children[2]!.children).toHaveLength(lesson.lines.length);
   });
 
   test("the repeat button cycles once, loop, off", () => {
@@ -557,79 +468,5 @@ describe("library userscript runtime smoke", () => {
     // Delete removes it from the persistent store.
     head.children[3]!.fire("click");
     expect(harness.storage.get("ysp:vocab:v1")).not.toContain('"town"');
-  });
-
-  test("unknown videos show a short not-in-library status", () => {
-    const harness = createHarness(script);
-    harness.navigate("unstudied123".slice(0, 11));
-    expect(harness.panel()).toBeNull();
-    expect(harness.statusPanel()).not.toBeNull();
-    expect(harness.statusPanel()!.textContent).toBe("이 영상은 Malgwi 라이브러리에 없습니다.");
-  });
-
-  test("stored local lessons still mount the study panel", () => {
-    const videoId = "localvid001";
-    const captions = validateCaptions([{ start_ms: 0, end_ms: 1000, text: "Stored local cue." }]);
-    const draft = buildLessonDraft(
-      captions,
-      { provider: "youtube", video_id: videoId, source_language: "en" },
-      "ko",
-    );
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "loc", translation: "로컬" }],
-    });
-    const storage = new Map<string, string>();
-    storage.set(`ysp:lesson:v2:${videoId}:ko:${sealed.source_digest}`, JSON.stringify(sealed));
-    storage.set(
-      "ysp:local-lessons:v1",
-      JSON.stringify([{ video_id: videoId, study_language: "ko", source_digest: sealed.source_digest, complete: true }]),
-    );
-    const harness = createHarness(script, storage);
-    harness.navigate(videoId);
-    expect(harness.statusPanel()).toBeNull();
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.panel()!.children[2]!.children[0]!.children[1]!.children[0]!.textContent).toBe("Stored local cue.");
-  });
-
-  test("digest changes on revisit show export without regenerate", async () => {
-    const videoId = "digest00001";
-    const storedCaptions = validateCaptions([{ start_ms: 0, end_ms: 1200, text: "Old cue." }]);
-    const draft = buildLessonDraft(
-      storedCaptions,
-      { provider: "youtube", video_id: videoId, source_language: "en" },
-      "ko",
-    );
-    const sealed = sealLesson({
-      ...draft,
-      lines: [{ ...draft.lines[0]!, pronunciation: "old", translation: "옛 줄" }],
-    });
-    const changedCaptions = validateCaptions([{ start_ms: 0, end_ms: 1200, text: "Fresh cue." }]);
-    const storage = new Map<string, string>();
-    storage.set(`ysp:lesson:v2:${videoId}:ko:${sealed.source_digest}`, JSON.stringify(sealed));
-    storage.set(
-      "ysp:local-lessons:v1",
-      JSON.stringify([{ video_id: videoId, study_language: "ko", source_digest: sealed.source_digest, complete: true }]),
-    );
-    const harness = createHarness(script, storage, "en-US", {
-      textTracks: [{
-        mode: "showing",
-        language: "en",
-        cues: changedCaptions.map((caption) => ({
-          startTime: caption.start_ms / 1000,
-          endTime: caption.end_ms / 1000,
-          text: caption.text,
-        })),
-      }],
-    });
-    harness.navigate(videoId);
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      if (harness.panel()?.querySelector('[data-ysp="digest-banner"]')) break;
-    }
-    expect(harness.panel()).not.toBeNull();
-    expect(harness.panel()!.querySelector('[data-ysp="digest-banner"]')).not.toBeNull();
-    expect(harness.nodes.some((node) => node.textContent === "Regenerate lesson")).toBe(false);
-    expect(harness.nodes.some((node) => node.textContent === "Export JSON")).toBe(true);
   });
 });

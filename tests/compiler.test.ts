@@ -54,16 +54,9 @@ describe("runtime template contract", () => {
     }
   });
 
-  test("library userscript is playback-only with no model grants", () => {
+  test("library userscript merges every studied video into one install", () => {
     expect(libraryTemplate.split(LESSONS_SLOT)).toHaveLength(2);
     expect(libraryTemplate).toContain("// ==UserScript==");
-    expect(libraryTemplate).toContain("@grant        none");
-    expect(libraryTemplate).not.toContain("GM_xmlhttpRequest");
-    expect(libraryTemplate).not.toContain("GM.setValue");
-    expect(libraryTemplate).not.toContain("GM.getValue");
-    expect(libraryTemplate).not.toContain("Create lesson");
-    expect(libraryTemplate).not.toContain("Regenerate");
-    expect(libraryTemplate).toContain("notInLibrary");
     expect(libraryTemplate).not.toContain("innerHTML");
     const other = structuredClone(lessonFixture);
     other.video.video_id = "zzz999AAA_-";

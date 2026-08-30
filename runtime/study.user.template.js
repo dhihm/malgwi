@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Malgwi Panel
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.16
+// @version      3.8
 // @description  Malgwi study panel over one YouTube watch page: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
 // @match        https://www.youtube.com/*
 // @grant        none
@@ -34,22 +34,22 @@ var LESSONS = LESSON ? [LESSON] : null;
           follow: "Follow", collapse: "Hide", help: "\u25B6 = jump \u00B7 drag a word = vocabulary \u00B7 drag header = move panel",
           empty: "Vocabulary is empty. Drag a word in the original text to add it.",
           dict: "Dictionary", dictTitle: "Open in a web dictionary", del: "Remove from vocabulary",
-          jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", off: "Turn Malgwi off", on: "Turn Malgwi on", menu: "Toggle Malgwi on/off", offToast: "Malgwi is off \u2014 press Alt+M (\u2325M) to bring it back.", add: "+ Vocab: " },
+          jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", add: "+ Vocab: " },
     ko: { panel: "말귀", vocab: "단어장", pron: "발음", trans: "번역",
           follow: "따라가기", collapse: "접기", help: "\u25B6 = 구간 점프 \u00B7 원문 드래그 = 단어장 \u00B7 헤더 드래그 = 패널 이동",
           empty: "단어장이 비어 있습니다. 원문에서 단어를 드래그해 추가하세요.",
           dict: "사전", dictTitle: "웹 사전에서 열기", del: "단어장에서 삭제",
-          jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", off: "말귀 끄기", on: "말귀 켜기", menu: "말귀 켜기/끄기", offToast: "말귀를 껐습니다 \u2014 Alt+M (\u2325M)으로 다시 켤 수 있습니다.", add: "+ 단어장: " },
+          jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", add: "+ 단어장: " },
     zh: { panel: "Malgwi", vocab: "生词本", pron: "发音", trans: "翻译",
           follow: "跟随", collapse: "收起", help: "\u25B6 = 跳转 \u00B7 划选单词 = 生词本 \u00B7 拖动标题 = 移动面板",
           empty: "生词本是空的。在原文中划选单词即可添加。",
           dict: "词典", dictTitle: "在网络词典中打开", del: "从生词本删除",
-          jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", off: "关闭 Malgwi", on: "打开 Malgwi", menu: "打开/关闭 Malgwi", offToast: "Malgwi 已关闭 \u2014 按 Alt+M (\u2325M) 重新打开。", add: "+ 生词: " },
+          jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", add: "+ 生词: " },
     ja: { panel: "Malgwi", vocab: "単語帳", pron: "発音", trans: "翻訳",
           follow: "追従", collapse: "閉じる", help: "\u25B6 = ジャンプ \u00B7 単語ドラッグ = 単語帳 \u00B7 ヘッダードラッグ = 移動",
           empty: "単語帳は空です。原文の単語をドラッグして追加してください。",
           dict: "辞書", dictTitle: "ウェブ辞書で開く", del: "単語帳から削除",
-          jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", off: "Malgwi をオフ", on: "Malgwi をオン", menu: "Malgwi オン/オフ", offToast: "Malgwi をオフにしました \u2014 Alt+M (\u2325M) で再表示できます。", add: "+ 単語帳: " }
+          jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", add: "+ 単語帳: " }
   };
 
   /* Panel chrome follows the user's system locale; lesson content
@@ -94,7 +94,6 @@ var LESSONS = LESSON ? [LESSON] : null;
   var panelOpacity = 1;
   var dragging = null;
   var resizing = null;
-  var malgwiOff = false;
   var panelWidth = null;
   var panelHeight = null;
 
@@ -136,53 +135,6 @@ var LESSONS = LESSON ? [LESSON] : null;
   function applyOpacity(value) {
     panelOpacity = value;
     if (panel) panel.style.opacity = String(value);
-  }
-
-  function showToast(message) {
-    var colors = palette();
-    var toast = document.createElement("div");
-    toast.textContent = message;
-    toast.style.cssText =
-      "position:fixed;left:50%;bottom:48px;transform:translateX(-50%);z-index:7000;" +
-      "padding:8px 16px;border-radius:999px;font-size:13px;" +
-      "background:" + colors.fg + ";color:" + colors.bg + ";box-shadow:0 2px 10px rgba(0,0,0,0.3);" +
-      "font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;";
-    document.body.appendChild(toast);
-    window.setTimeout(function () { toast.remove(); }, 4000);
-  }
-
-  function showRestoreDot() {
-    if (document.getElementById("ysp-restore")) return;
-    var colors = palette();
-    var dot = document.createElement("button");
-    dot.id = "ysp-restore";
-    dot.title = uiStrings().on;
-    dot.style.cssText =
-      "position:fixed;right:6px;bottom:64px;width:14px;height:14px;z-index:6000;padding:0;" +
-      "border-radius:50%;border:1px solid " + colors.border + ";background:" + colors.activeEdge + ";" +
-      "opacity:0.35;cursor:pointer;";
-    dot.addEventListener("mouseenter", function () { dot.style.opacity = "1"; });
-    dot.addEventListener("mouseleave", function () { dot.style.opacity = "0.35"; });
-    dot.addEventListener("click", function () { setOff(false); });
-    document.body.appendChild(dot);
-  }
-
-  function removeRestoreDot() {
-    var dot = document.getElementById("ysp-restore");
-    if (dot) dot.remove();
-  }
-
-  function setOff(next) {
-    /* Session-only: Malgwi is always on after a page load. */
-    malgwiOff = next;
-    if (next) {
-      unmount();
-      showRestoreDot();
-      showToast(uiStrings().offToast);
-    } else {
-      removeRestoreDot();
-      check();
-    }
   }
 
   function applySize(width, height) {
@@ -781,14 +733,6 @@ var LESSONS = LESSON ? [LESSON] : null;
       renderList();
     }));
     header.appendChild(chipButton(text.collapse, function () { return false; }, function () { setCollapsed(true); }));
-    var offButton = document.createElement("button");
-    offButton.textContent = "✕";
-    offButton.title = text.off;
-    offButton.style.cssText =
-      "font-size:12px;padding:3px 9px;border-radius:999px;cursor:pointer;border:1px solid " + colors.border + ";" +
-      "background:" + colors.chip + ";color:" + colors.muted + ";";
-    offButton.addEventListener("click", function () { setOff(true); });
-    header.appendChild(offButton);
     panel.appendChild(header);
 
     var help = document.createElement("div");
@@ -906,10 +850,6 @@ var LESSONS = LESSON ? [LESSON] : null;
   }
 
   function check() {
-    if (malgwiOff) {
-      unmount();
-      return;
-    }
     var next = lessonFor(currentVideoId());
     if (next) {
       mount(next);
@@ -917,18 +857,6 @@ var LESSONS = LESSON ? [LESSON] : null;
       unmount();
     }
   }
-
-
-  /* Alt+M (Option+M) toggles Malgwi entirely, even while it is off.
-   * Capture phase on window: YouTube's own hotkey handlers cannot
-   * swallow the event before it reaches us. */
-  window.addEventListener("keydown", function (event) {
-    if (event.altKey && !event.ctrlKey && !event.metaKey &&
-        (event.code === "KeyM" || event.key === "m" || event.key === "M")) {
-      setOff(!malgwiOff);
-    }
-  }, true);
-
 
   /* YouTube is a SPA: react to its navigation event, with a slow fallback. */
   window.addEventListener("yt-navigate-finish", function () { window.setTimeout(check, 300); });

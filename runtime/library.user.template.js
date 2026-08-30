@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Malgwi
 // @namespace    https://github.com/dhihm/malgwi
-// @version      3.16
+// @version      3.8
 // @description  Malgwi study library over the real YouTube watch pages: pronunciation, translation, explicit jump buttons, current-line highlight, and a drag-to-collect vocabulary book.
 // @match        https://www.youtube.com/*
 // @grant        none
@@ -16,15 +16,12 @@
 var LESSONS = /*__LESSONS_JSON__*/null;
 
 (function () {
-  if (!Array.isArray(LESSONS)) return;
+  if (!Array.isArray(LESSONS) || LESSONS.length === 0) return;
   /* One panel per page: a second installed copy of this script (or an
    * older per-video build left installed) must not double-mount. */
   if (window.__yspPanelActive) return;
   window.__yspPanelActive = true;
   var VOCAB_KEY = "ysp:vocab:v1";
-  var LOCAL_LESSON_PREFIX = "ysp:lesson:v2:";
-  var LOCAL_LESSON_INDEX_KEY = "ysp:local-lessons:v1";
-  var LINE_CAP = 200;
   /* Unicode-aware: Latin words, CJK sequences, or short phrases. */
   var WORD_SHAPE = /^[\p{L}\p{N}][\p{L}\p{N}'’-]*(?: [\p{L}\p{N}'’-]+){0,3}$/u;
   var CJK_ONLY = /^[\u1100-\u11FF\u3040-\u30FF\u3130-\u318F\u4E00-\u9FFF\uAC00-\uD7AF]+$/;
@@ -35,34 +32,22 @@ var LESSONS = /*__LESSONS_JSON__*/null;
           follow: "Follow", collapse: "Hide", help: "\u25B6 = jump \u00B7 drag a word = vocabulary \u00B7 drag header = move panel",
           empty: "Vocabulary is empty. Drag a word in the original text to add it.",
           dict: "Dictionary", dictTitle: "Open in a web dictionary", del: "Remove from vocabulary",
-          jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", off: "Turn Malgwi off", on: "Turn Malgwi on", menu: "Toggle Malgwi on/off", offToast: "Malgwi is off \u2014 press Alt+M (\u2325M) to bring it back.", add: "+ Vocab: ",
-          notInLibrary: "This video is not in your Malgwi library.",
-          export: "Export JSON",
-          digestChanged: "Captions changed since the stored lesson. Export the old one or re-author with the local CLI." },
+          jump: "Jump to this segment", repeat: "Repeat: once \u2192 loop \u2192 off", sentence: "Sentence repeat", speed: "Playback speed", opacity: "Panel opacity", resize: "Resize", add: "+ Vocab: " },
     ko: { panel: "말귀", vocab: "단어장", pron: "발음", trans: "번역",
           follow: "따라가기", collapse: "접기", help: "\u25B6 = 구간 점프 \u00B7 원문 드래그 = 단어장 \u00B7 헤더 드래그 = 패널 이동",
           empty: "단어장이 비어 있습니다. 원문에서 단어를 드래그해 추가하세요.",
           dict: "사전", dictTitle: "웹 사전에서 열기", del: "단어장에서 삭제",
-          jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", off: "말귀 끄기", on: "말귀 켜기", menu: "말귀 켜기/끄기", offToast: "말귀를 껐습니다 \u2014 Alt+M (\u2325M)으로 다시 켤 수 있습니다.", add: "+ 단어장: ",
-          notInLibrary: "이 영상은 Malgwi 라이브러리에 없습니다.",
-          export: "JSON 내보내기",
-          digestChanged: "저장된 레슨 이후 자막이 바뀌었습니다. 내보내거나 로컬 CLI로 다시 작성하세요." },
+          jump: "이 구간으로 이동", repeat: "반복: 1회 \u2192 계속 \u2192 해제", sentence: "문장 반복", speed: "재생 속도", opacity: "패널 투명도", resize: "크기 조절", add: "+ 단어장: " },
     zh: { panel: "Malgwi", vocab: "生词本", pron: "发音", trans: "翻译",
           follow: "跟随", collapse: "收起", help: "\u25B6 = 跳转 \u00B7 划选单词 = 生词本 \u00B7 拖动标题 = 移动面板",
           empty: "生词本是空的。在原文中划选单词即可添加。",
           dict: "词典", dictTitle: "在网络词典中打开", del: "从生词本删除",
-          jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", off: "关闭 Malgwi", on: "打开 Malgwi", menu: "打开/关闭 Malgwi", offToast: "Malgwi 已关闭 \u2014 按 Alt+M (\u2325M) 重新打开。", add: "+ 生词: ",
-          notInLibrary: "此视频不在 Malgwi 库中。",
-          export: "导出 JSON",
-          digestChanged: "字幕已变更。请导出旧课程，或用本地 CLI 重新编写。" },
+          jump: "跳转到此片段", repeat: "循环: 一次 \u2192 持续 \u2192 关闭", sentence: "整句循环", speed: "播放速度", opacity: "面板透明度", resize: "调整大小", add: "+ 生词: " },
     ja: { panel: "Malgwi", vocab: "単語帳", pron: "発音", trans: "翻訳",
           follow: "追従", collapse: "閉じる", help: "\u25B6 = ジャンプ \u00B7 単語ドラッグ = 単語帳 \u00B7 ヘッダードラッグ = 移動",
           empty: "単語帳は空です。原文の単語をドラッグして追加してください。",
           dict: "辞書", dictTitle: "ウェブ辞書で開く", del: "単語帳から削除",
-          jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", off: "Malgwi をオフ", on: "Malgwi をオン", menu: "Malgwi オン/オフ", offToast: "Malgwi をオフにしました \u2014 Alt+M (\u2325M) で再表示できます。", add: "+ 単語帳: ",
-          notInLibrary: "この動画は Malgwi ライブラリにありません。",
-          export: "JSON エクスポート",
-          digestChanged: "保存済みレッスン以降に字幕が変わりました。エクスポートするか、ローカル CLI で再作成してください。" }
+          jump: "この区間へ移動", repeat: "リピート: 1回 \u2192 連続 \u2192 解除", sentence: "文リピート", speed: "再生速度", opacity: "パネルの不透明度", resize: "サイズ変更", add: "+ 単語帳: " }
   };
 
   /* Panel chrome follows the user's system locale; lesson content
@@ -89,7 +74,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   }
   var lesson = null;
   var panel = null;
-  var statusPanel = null;
   var listEl = null;
   var rows = [];
   var activeIndex = -1;
@@ -108,150 +92,8 @@ var LESSONS = /*__LESSONS_JSON__*/null;
   var panelOpacity = 1;
   var dragging = null;
   var resizing = null;
-  var malgwiOff = false;
   var panelWidth = null;
   var panelHeight = null;
-  var digestChangedActive = false;
-  var mountedLessonKey = "";
-
-  function canonicalJson(value) {
-    if (value === null || typeof value !== "object") return JSON.stringify(value);
-    if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
-    var entries = Object.keys(value)
-      .filter(function (key) { return value[key] !== undefined; })
-      .sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; })
-      .map(function (key) { return JSON.stringify(key) + ":" + canonicalJson(value[key]); });
-    return "{" + entries.join(",") + "}";
-  }
-
-  function sha256Hex(text) {
-    if (!window.crypto || !window.crypto.subtle) return Promise.reject(new Error("crypto unavailable"));
-    return window.crypto.subtle
-      .digest("SHA-256", new TextEncoder().encode(text))
-      .then(function (buffer) {
-        return Array.from(new Uint8Array(buffer))
-          .map(function (byte) { return byte.toString(16).padStart(2, "0"); })
-          .join("");
-      });
-  }
-
-  function captionDigest(captions) {
-    return sha256Hex(canonicalJson(captions));
-  }
-
-  function localLessonStorageKey(videoId, studyLanguage, sourceDigest) {
-    return LOCAL_LESSON_PREFIX + videoId + ":" + studyLanguage + ":" + sourceDigest;
-  }
-
-  function loadLocalIndex() {
-    try {
-      var parsed = JSON.parse(window.localStorage.getItem(LOCAL_LESSON_INDEX_KEY) || "[]");
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function loadStoredLesson(key) {
-    try {
-      var raw = window.localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function isLessonComplete(candidate) {
-    return !!(
-      candidate &&
-      Array.isArray(candidate.lines) &&
-      candidate.lines.length > 0 &&
-      candidate.lines.every(function (line) {
-        return line.pronunciation && line.translation;
-      })
-    );
-  }
-
-  function resolveLocalLesson(videoId) {
-    var index = loadLocalIndex();
-    for (var i = 0; i < index.length; i += 1) {
-      var entry = index[i];
-      if (entry.video_id !== videoId) continue;
-      var key = localLessonStorageKey(entry.video_id, entry.study_language, entry.source_digest);
-      var stored = loadStoredLesson(key);
-      if (stored && isLessonComplete(stored)) return { entry: entry, lesson: stored, key: key };
-    }
-    return null;
-  }
-
-  function exportLessonJson(targetLesson) {
-    var blob = new Blob([JSON.stringify(targetLesson, null, 2) + "\n"], { type: "application/json" });
-    var url = URL.createObjectURL(blob);
-    var link = document.createElement("a");
-    link.href = url;
-    link.download = targetLesson.video.video_id + "-lesson-v2.json";
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function stripCueText(html) {
-    var div = document.createElement("div");
-    div.textContent = String(html || "").replace(/<[^>]+>/g, " ");
-    return div.textContent.replace(/\s+/g, " ").trim();
-  }
-
-  function readSessionCaptions() {
-    var video = document.querySelector("#movie_player video") || document.querySelector("video");
-    if (!video) return { error: "no_video" };
-    var track = null;
-    var tracks = video.textTracks;
-    if (!tracks) return { error: "no_captions" };
-    for (var i = 0; i < tracks.length; i += 1) {
-      if (tracks[i].mode === "showing" || tracks[i].mode === "hidden") track = tracks[i];
-    }
-    if (!track) {
-      for (var j = 0; j < tracks.length; j += 1) {
-        if (tracks[j].cues && tracks[j].cues.length > 0) {
-          track = tracks[j];
-          break;
-        }
-      }
-    }
-    if (!track || !track.cues || track.cues.length === 0) return { error: "no_captions" };
-    var captions = [];
-    var previousStart = -1;
-    for (var k = 0; k < track.cues.length; k += 1) {
-      var cue = track.cues[k];
-      var text = stripCueText(cue.text);
-      if (!text) continue;
-      var startMs = Math.round(cue.startTime * 1000);
-      var endMs = Math.round(cue.endTime * 1000);
-      if (endMs <= startMs) continue;
-      if (startMs < previousStart) continue;
-      previousStart = startMs;
-      captions.push({ start_ms: startMs, end_ms: endMs, text: text });
-    }
-    if (captions.length === 0) return { error: "no_captions" };
-    if (captions.length > LINE_CAP) captions = captions.slice(0, LINE_CAP);
-    return { captions: captions, language: track.language || "" };
-  }
-
-  function sessionDigestDiffers(storedDigest, callback) {
-    var capture = readSessionCaptions();
-    if (capture.error || !capture.captions || capture.captions.length === 0) {
-      callback(null);
-      return;
-    }
-    captionDigest(capture.captions).then(function (currentDigest) {
-      callback(currentDigest !== storedDigest);
-    }).catch(function () {
-      callback(null);
-    });
-  }
-
-  function lessonMountKey(someLesson) {
-    return someLesson.video.video_id + "\0" + (someLesson.study_language || "") + "\0" + (someLesson.source_digest || "");
-  }
 
   function loadUi() {
     try {
@@ -293,54 +135,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     if (panel) panel.style.opacity = String(value);
   }
 
-  function showToast(message) {
-    var colors = palette();
-    var toast = document.createElement("div");
-    toast.textContent = message;
-    toast.style.cssText =
-      "position:fixed;left:50%;bottom:48px;transform:translateX(-50%);z-index:7000;" +
-      "padding:8px 16px;border-radius:999px;font-size:13px;" +
-      "background:" + colors.fg + ";color:" + colors.bg + ";box-shadow:0 2px 10px rgba(0,0,0,0.3);" +
-      "font-family:'Pretendard','Apple SD Gothic Neo','Noto Sans KR',system-ui,sans-serif;";
-    document.body.appendChild(toast);
-    window.setTimeout(function () { toast.remove(); }, 4000);
-  }
-
-  function showRestoreDot() {
-    if (document.getElementById("ysp-restore")) return;
-    var colors = palette();
-    var dot = document.createElement("button");
-    dot.id = "ysp-restore";
-    dot.title = uiStrings().on;
-    dot.style.cssText =
-      "position:fixed;right:6px;bottom:64px;width:14px;height:14px;z-index:6000;padding:0;" +
-      "border-radius:50%;border:1px solid " + colors.border + ";background:" + colors.activeEdge + ";" +
-      "opacity:0.35;cursor:pointer;";
-    dot.addEventListener("mouseenter", function () { dot.style.opacity = "1"; });
-    dot.addEventListener("mouseleave", function () { dot.style.opacity = "0.35"; });
-    dot.addEventListener("click", function () { setOff(false); });
-    document.body.appendChild(dot);
-  }
-
-  function removeRestoreDot() {
-    var dot = document.getElementById("ysp-restore");
-    if (dot) dot.remove();
-  }
-
-  function setOff(next) {
-    /* Session-only: Malgwi is always on after a page load. */
-    malgwiOff = next;
-    if (next) {
-      unmount();
-      unmountStatus();
-      showRestoreDot();
-      showToast(uiStrings().offToast);
-    } else {
-      removeRestoreDot();
-      check();
-    }
-  }
-
   function applySize(width, height) {
     if (!panel) return;
     var maxWidth = (window.innerWidth || 1280) - 40;
@@ -376,14 +170,6 @@ var LESSONS = /*__LESSONS_JSON__*/null;
         return candidate;
       }
     }
-    return null;
-  }
-
-  function activeLessonFor(videoId) {
-    var compiled = lessonFor(videoId);
-    if (compiled) return compiled;
-    var local = resolveLocalLesson(videoId);
-    if (local) return local.lesson;
     return null;
   }
 
@@ -945,38 +731,7 @@ var LESSONS = /*__LESSONS_JSON__*/null;
       renderList();
     }));
     header.appendChild(chipButton(text.collapse, function () { return false; }, function () { setCollapsed(true); }));
-    var offButton = document.createElement("button");
-    offButton.textContent = "✕";
-    offButton.title = text.off;
-    offButton.style.cssText =
-      "font-size:12px;padding:3px 9px;border-radius:999px;cursor:pointer;border:1px solid " + colors.border + ";" +
-      "background:" + colors.chip + ";color:" + colors.muted + ";";
-    offButton.addEventListener("click", function () { setOff(true); });
-    header.appendChild(offButton);
     panel.appendChild(header);
-
-    if (digestChangedActive) {
-      var banner = document.createElement("div");
-      banner.setAttribute("data-ysp", "digest-banner");
-      banner.style.cssText = "padding:8px 12px;border-bottom:1px solid " + colors.border + ";background:" + colors.chip + ";";
-      var bannerText = document.createElement("div");
-      bannerText.textContent = text.digestChanged;
-      bannerText.style.cssText = "font-size:12px;color:" + colors.pron + ";margin-bottom:8px;";
-      banner.appendChild(bannerText);
-      var bannerRow = document.createElement("div");
-      bannerRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
-      var exportBtn = document.createElement("button");
-      exportBtn.textContent = text.export;
-      exportBtn.style.cssText =
-        "font-size:12px;padding:4px 10px;border-radius:8px;cursor:pointer;border:1px solid " + colors.border + ";" +
-        "background:" + colors.bg + ";color:" + colors.fg + ";";
-      exportBtn.addEventListener("click", function () {
-        if (lesson) exportLessonJson(lesson);
-      });
-      bannerRow.appendChild(exportBtn);
-      banner.appendChild(bannerRow);
-      panel.appendChild(banner);
-    }
 
     var help = document.createElement("div");
     help.textContent = text.help;
@@ -1059,16 +814,10 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     if (tab) tab.style.display = collapsed ? "block" : "none";
   }
 
-  function mount(next, options) {
-    options = options || {};
-    var nextDigestChanged = !!options.digestChanged;
-    var nextKey = lessonMountKey(next);
-    if (panel && mountedLessonKey === nextKey && digestChangedActive === nextDigestChanged) return;
-    unmountStatus();
+  function mount(next) {
+    if (panel && lesson === next) return;
     unmount();
     lesson = next;
-    mountedLessonKey = nextKey;
-    digestChangedActive = nextDigestChanged;
     buildPanel();
     timer = window.setInterval(tick, 200);
     if (collapsed) setCollapsed(true);
@@ -1096,78 +845,16 @@ var LESSONS = /*__LESSONS_JSON__*/null;
     repeatMode = 0;
     repeatArmed = false;
     lesson = null;
-    digestChangedActive = false;
-    mountedLessonKey = "";
-  }
-
-  function mountStatus() {
-    if (statusPanel) return;
-    unmount();
-    var colors = palette();
-    var text = uiStrings();
-    statusPanel = document.createElement("div");
-    statusPanel.id = "ysp-status-panel";
-    statusPanel.style.cssText =
-      "position:fixed;top:60px;right:12px;z-index:6000;max-width:320px;padding:10px 12px;" +
-      "background:" + colors.bg + ";color:" + colors.muted + ";border:1px solid " + colors.border + ";" +
-      "border-radius:8px;font-size:12px;box-shadow:-2px 2px 12px rgba(0,0,0,0.12);";
-    statusPanel.textContent = text.notInLibrary;
-    document.body.appendChild(statusPanel);
-  }
-
-  function unmountStatus() {
-    if (statusPanel) {
-      statusPanel.remove();
-      statusPanel = null;
-    }
   }
 
   function check() {
-    if (malgwiOff) {
+    var next = lessonFor(currentVideoId());
+    if (next) {
+      mount(next);
+    } else {
       unmount();
-      unmountStatus();
-      return;
     }
-    var videoId = currentVideoId();
-    if (!videoId) {
-      unmount();
-      unmountStatus();
-      return;
-    }
-    var compiled = lessonFor(videoId);
-    if (compiled) {
-      unmountStatus();
-      mount(compiled);
-      return;
-    }
-    var local = resolveLocalLesson(videoId);
-    if (local) {
-      unmountStatus();
-      var mountedVideoId = lesson && lesson.video ? lesson.video.video_id : null;
-      if (mountedVideoId !== videoId) unmount();
-      if (!panel || mountedVideoId !== videoId) mount(local.lesson, { digestChanged: false });
-      sessionDigestDiffers(local.lesson.source_digest, function (changed) {
-        if (currentVideoId() !== videoId) return;
-        var wantBanner = changed === true;
-        if (digestChangedActive !== wantBanner) mount(local.lesson, { digestChanged: wantBanner });
-      });
-      return;
-    }
-    unmount();
-    mountStatus();
   }
-
-
-  /* Alt+M (Option+M) toggles Malgwi entirely, even while it is off.
-   * Capture phase on window: YouTube's own hotkey handlers cannot
-   * swallow the event before it reaches us. */
-  window.addEventListener("keydown", function (event) {
-    if (event.altKey && !event.ctrlKey && !event.metaKey &&
-        (event.code === "KeyM" || event.key === "m" || event.key === "M")) {
-      setOff(!malgwiOff);
-    }
-  }, true);
-
 
   /* YouTube is a SPA: react to its navigation event, with a slow fallback. */
   window.addEventListener("yt-navigate-finish", function () { window.setTimeout(check, 300); });

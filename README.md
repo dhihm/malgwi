@@ -109,7 +109,6 @@ Adding a video to your library is a one-time preparation:
 | Drag the header | Move the panel anywhere (it undocks) |
 | `◢` bottom-right grip | Resize the panel |
 | Collapse chip | Fold the panel into a side tab |
-| `✕` | Hide Malgwi for this visit; the small dot at the screen edge or `Alt+M` (`⌥M`) brings it back, and every page load starts on |
 
 Vocabulary entries and panel placement live in your browser's
 `localStorage` only.
